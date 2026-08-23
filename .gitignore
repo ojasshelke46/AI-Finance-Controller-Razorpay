@@ -1,0 +1,22 @@
+# env
+.env
+.env.local
+.env.*.local
+
+# web (Next.js)
+web/node_modules/
+web/.next/
+web/out/
+web/.vercel/
+web/*.tsbuildinfo
+web/next-env.d.ts
+
+# api (Python)
+api/.venv/
+api/__pycache__/
+api/**/__pycache__/
+api/*.egg-info/
+api/.pytest_cache/
+
+# OS
+.DS_Store
