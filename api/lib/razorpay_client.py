@@ -7,12 +7,26 @@ docs on 2026-08-22:
   https://razorpay.com/docs/api/settlements/fetch-recon/
 """
 
+import logging
+import time
+
 import httpx
 
 from .config import RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET
 
+logger = logging.getLogger("lib.razorpay_client")
+
 _BASE_URL = "https://api.razorpay.com/v1"
 _PAGE_SIZE = 100
+
+_RETRIES = 3
+_RETRY_BASE_DELAY = 1.0
+_MAX_RETRY_DELAY = 30.0
+# 429 is rate limiting and 5xx is Razorpay having a bad moment. Both are
+# worth waiting out. A 4xx that is not 429 means the request itself is
+# wrong (bad credentials, bad params) and retrying just repeats the
+# mistake more expensively.
+_RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 
 
 class RazorpayError(RuntimeError):
@@ -25,12 +39,57 @@ def _client() -> httpx.Client:
     return httpx.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET), timeout=30.0)
 
 
+def _retry_delay(resp: httpx.Response, attempt: int) -> float:
+    """Honour Retry-After when Razorpay sends it — the server's own
+    number is better than a guess — otherwise exponential backoff."""
+    header = resp.headers.get("Retry-After")
+    if header:
+        try:
+            return min(float(header), _MAX_RETRY_DELAY)
+        except ValueError:
+            pass
+    return min(_RETRY_BASE_DELAY * (2**attempt), _MAX_RETRY_DELAY)
+
+
 def _get(path: str, params: dict) -> dict:
-    with _client() as client:
-        resp = client.get(f"{_BASE_URL}{path}", params=params)
-    if resp.status_code >= 400:
-        raise RazorpayError(f"Razorpay GET {path} returned HTTP {resp.status_code}: {resp.text}")
-    return resp.json()
+    """GET with backoff on 429 and 5xx.
+
+    Rate limiting must not lose data: a poller that gives up on the
+    first 429 silently drops whatever activity was in that page, and the
+    cursor moves on regardless, so the rows are never seen again. Waiting
+    is cheap; a hole in the ledger is not.
+    """
+    last_error: str | None = None
+
+    for attempt in range(_RETRIES + 1):
+        try:
+            with _client() as client:
+                resp = client.get(f"{_BASE_URL}{path}", params=params)
+        except httpx.HTTPError as exc:
+            last_error = f"network error: {exc}"
+            if attempt < _RETRIES:
+                delay = min(_RETRY_BASE_DELAY * (2**attempt), _MAX_RETRY_DELAY)
+                logger.warning("Razorpay GET %s network error (attempt %d/%d): %s — retrying in %.1fs",
+                               path, attempt + 1, _RETRIES + 1, exc, delay)
+                time.sleep(delay)
+                continue
+            raise RazorpayError(f"Razorpay GET {path} failed: {exc}") from exc
+
+        if resp.status_code in _RETRYABLE_STATUSES and attempt < _RETRIES:
+            delay = _retry_delay(resp, attempt)
+            logger.warning("Razorpay GET %s returned HTTP %d (attempt %d/%d) — retrying in %.1fs",
+                           path, resp.status_code, attempt + 1, _RETRIES + 1, delay)
+            time.sleep(delay)
+            last_error = f"HTTP {resp.status_code}: {resp.text}"
+            continue
+
+        if resp.status_code >= 400:
+            raise RazorpayError(
+                f"Razorpay GET {path} returned HTTP {resp.status_code}: {resp.text}"
+            )
+        return resp.json()
+
+    raise RazorpayError(f"Razorpay GET {path} failed after {_RETRIES + 1} attempts: {last_error}")
 
 
 def _paginate(path: str, params: dict) -> list[dict]:

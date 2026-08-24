@@ -1,4 +1,6 @@
+import logging
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,8 +9,29 @@ from lib import db
 from lib.byteplus import ByteplusError, complete_text
 from lib.razorpay_client import RazorpayError
 from lib.razorpay_client import ping as razorpay_ping
+from routes.console import router as console_router
+from routes.qna import router as qna_router
+from runtime import scheduler
 
-app = FastAPI(title="AI Revenue Recovery API")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Start the background scheduler with the API and stop it with the
+    API, so the autonomous side has exactly the same lifetime as the
+    process serving requests."""
+    scheduler.start()
+    try:
+        yield
+    finally:
+        scheduler.shutdown()
+
+
+app = FastAPI(title="AI Revenue Recovery API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,6 +39,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(qna_router)
+app.include_router(console_router)
 
 
 def _check_supabase() -> dict:

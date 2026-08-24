@@ -87,11 +87,29 @@ def parse_date(text: str | None) -> str | None:
     raise FileParseError(f"unrecognised date format: {text!r}")
 
 
-def parse_bank_csv(path: Path, batch_id: str) -> list[dict]:
+def parse_bank_csv(path: Path, batch_id: str, *, skipped: list[dict] | None = None) -> list[dict]:
     """Parse the bank statement. debit -> negative paise, credit ->
     positive. The running balance column is carried into raw but not
-    used as an amount."""
+    used as an amount.
+
+    A row this cannot parse is appended to `skipped` with its line
+    number and the reason, and passed over, rather than aborting the
+    whole file. One corrupt line in a bank export must not cost the
+    other two thousand good rows — and a silently dropped row would be
+    worse still, so every skip is returned to the caller and written to
+    audit_log.
+    """
     rows: list[dict] = []
+    skipped = skipped if skipped is not None else []
+
+    def _skip(lineno: int, reason: str, record: dict) -> None:
+        logger.warning("line %d: %s, skipping", lineno, reason)
+        skipped.append({
+            "line": lineno,
+            "reason": reason,
+            "record": {k: v for k, v in record.items() if k},
+        })
+
     with Path(path).open(newline="", encoding="utf-8") as fh:
         reader = csv.DictReader(fh)
         for lineno, record in enumerate(reader, start=2):
@@ -100,12 +118,23 @@ def parse_bank_csv(path: Path, batch_id: str) -> list[dict]:
             credit = (record.get("credit") or "").strip()
 
             if not debit and not credit:
-                logger.warning("line %d: no debit or credit, skipping", lineno)
+                _skip(lineno, "no debit or credit value", record)
                 continue
             if debit and credit:
-                raise FileParseError(f"line {lineno}: both debit and credit populated")
+                _skip(lineno, "both debit and credit populated", record)
+                continue
 
-            amount = -rupee_string_to_paise(debit) if debit else rupee_string_to_paise(credit)
+            try:
+                amount = -rupee_string_to_paise(debit) if debit else rupee_string_to_paise(credit)
+            except (ValueError, TypeError) as exc:
+                _skip(lineno, f"unparseable amount: {exc}", record)
+                continue
+
+            try:
+                txn_date = parse_date(record.get("value_date"))
+            except FileParseError as exc:
+                _skip(lineno, f"unparseable date: {exc}", record)
+                continue
 
             rows.append({
                 "batch_id": batch_id,
@@ -115,8 +144,8 @@ def parse_bank_csv(path: Path, batch_id: str) -> list[dict]:
                 "fee_paise": None,
                 "tax_paise": None,
                 "net_paise": None,
-                "txn_date": parse_date(record.get("value_date")),
-                "value_date": parse_date(record.get("value_date")),
+                "txn_date": txn_date,
+                "value_date": txn_date,
                 "description": narration,
                 "counterparty": None,
                 "raw": {"source_file": Path(path).name, "line": lineno, **record},
@@ -133,11 +162,15 @@ def _find_header_row(ws) -> int:
     raise FileParseError(f"no header row found in sheet {ws.title!r}")
 
 
-def parse_ledger_xlsx(path: Path, batch_id: str) -> list[dict]:
+def parse_ledger_xlsx(path: Path, batch_id: str, *, skipped: list[dict] | None = None) -> list[dict]:
     """Parse every sheet of the ledger workbook, skipping each sheet's
-    junk header block. Amounts carry a trailing CR/DR marker."""
+    junk header block. Amounts carry a trailing CR/DR marker.
+
+    Unparseable rows are recorded in `skipped` and passed over, same
+    contract as parse_bank_csv."""
     wb = load_workbook(Path(path), read_only=True, data_only=True)
     rows: list[dict] = []
+    skipped = skipped if skipped is not None else []
 
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
@@ -159,10 +192,20 @@ def parse_ledger_xlsx(path: Path, batch_id: str) -> list[dict]:
             amount_text = cell("amount")
             if amount_text is None or str(amount_text).strip() == "":
                 logger.warning("%s row %d: no amount, skipping", sheet_name, excel_row)
+                skipped.append({"sheet": sheet_name, "line": excel_row,
+                                "reason": "no amount value", "record": {}})
                 continue
 
             # rupee_string_to_paise reads the trailing CR/DR marker itself.
-            amount = rupee_string_to_paise(str(amount_text))
+            try:
+                amount = rupee_string_to_paise(str(amount_text))
+            except (ValueError, TypeError) as exc:
+                logger.warning("%s row %d: unparseable amount (%s), skipping",
+                               sheet_name, excel_row, exc)
+                skipped.append({"sheet": sheet_name, "line": excel_row,
+                                "reason": f"unparseable amount: {exc}",
+                                "record": {"amount": str(amount_text)}})
+                continue
 
             rows.append({
                 "batch_id": batch_id,
@@ -216,18 +259,35 @@ def ingest_files(batch_id: str, bank_csv: Path, ledger_xlsx: Path) -> dict:
     """Parse both source files into txns for the given batch."""
     _write_audit(batch_id, "start", {"bank_csv": str(bank_csv), "ledger_xlsx": str(ledger_xlsx)})
 
-    bank_rows = parse_bank_csv(bank_csv, batch_id)
-    ledger_rows = parse_ledger_xlsx(ledger_xlsx, batch_id)
+    bank_skipped: list[dict] = []
+    ledger_skipped: list[dict] = []
+    bank_rows = parse_bank_csv(bank_csv, batch_id, skipped=bank_skipped)
+    ledger_rows = parse_ledger_xlsx(ledger_xlsx, batch_id, skipped=ledger_skipped)
 
     _insert(bank_rows)
     _insert(ledger_rows)
 
+    # Skipped rows get their own audit entry, not just a count in the
+    # summary: "we dropped 3 rows" is not actionable, "we dropped line
+    # 47 because both debit and credit were populated" is.
+    if bank_skipped or ledger_skipped:
+        _write_audit(batch_id, "records_skipped", {
+            "bank_skipped_count": len(bank_skipped),
+            "ledger_skipped_count": len(ledger_skipped),
+            "bank_skipped": bank_skipped[:50],
+            "ledger_skipped": ledger_skipped[:50],
+            "truncated": len(bank_skipped) > 50 or len(ledger_skipped) > 50,
+        })
+
     summary = {
         "bank_rows_parsed": len(bank_rows),
         "ledger_rows_parsed": len(ledger_rows),
+        "bank_rows_skipped": len(bank_skipped),
+        "ledger_rows_skipped": len(ledger_skipped),
         "bank_missing_ref": sum(1 for r in bank_rows if not r["external_ref"]),
         "ledger_missing_ref": sum(1 for r in ledger_rows if not r["external_ref"]),
         "total_rows": len(bank_rows) + len(ledger_rows),
+        "skipped_lines": [s["line"] for s in bank_skipped + ledger_skipped][:50],
     }
     _write_audit(batch_id, "finish", summary)
     return summary

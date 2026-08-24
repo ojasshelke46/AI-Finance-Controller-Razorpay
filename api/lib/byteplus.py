@@ -97,13 +97,29 @@ def _request(messages: list[dict[str, str]], *, timeout: float = 60.0) -> dict[s
     raise ByteplusError(str(last_exc))
 
 
-def complete_text(system: str, user: str) -> str:
-    """Single chat completion, returns the assistant message content."""
+def complete_text(system: str, user: str, *, usage_out: dict | None = None) -> str:
+    """Single chat completion, returns the assistant message content.
+
+    Pass a dict as usage_out to receive {latency_ms, prompt_tokens,
+    completion_tokens, total_tokens} for the call — callers that need to
+    log cost/latency (e.g. an audit trail) don't have to re-implement a
+    client to get it. Optional and additive: existing callers that don't
+    pass it see no change.
+    """
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
     ]
+    start = time.monotonic()
     data = _request(messages)
+    if usage_out is not None:
+        usage = data.get("usage", {})
+        usage_out.update({
+            "latency_ms": (time.monotonic() - start) * 1000,
+            "prompt_tokens": usage.get("prompt_tokens"),
+            "completion_tokens": usage.get("completion_tokens"),
+            "total_tokens": usage.get("total_tokens"),
+        })
     try:
         return data["choices"][0]["message"]["content"]
     except (KeyError, IndexError) as exc:
@@ -112,7 +128,7 @@ def complete_text(system: str, user: str) -> str:
         ) from exc
 
 
-def complete_json(system: str, user: str, schema_hint: str) -> dict:
+def complete_json(system: str, user: str, schema_hint: str, *, usage_out: dict | None = None) -> dict:
     """Chat completion that asks the model for JSON in the prompt text
     (no response_format param — Ark may not support it), then parses it.
     Raises ByteplusParseError (carrying the raw text) if parsing fails."""
@@ -122,7 +138,7 @@ def complete_json(system: str, user: str, schema_hint: str) -> dict:
         f"{schema_hint}\n"
         f"Do not wrap it in markdown code fences or add any explanation."
     )
-    raw = complete_text(system, json_user)
+    raw = complete_text(system, json_user, usage_out=usage_out)
 
     stripped = _FENCE_RE.sub("", raw).strip()
     try:

@@ -63,7 +63,30 @@ SUM_TOLERANCE_PAISE = 5
 # for a large-enough subset that a few paise of drift is plausible
 # rounding rather than luck.
 MIN_SUBSET_SIZE_FOR_TOLERANCE_MATCH = 5
+
+# Exactness is not enough on its own either. A small target lands exactly
+# on some 2-3 item combination of a dense candidate pool almost every
+# time — observed gluing a random noise bank row onto two unrelated
+# payments, at residual 0, with a unique solution. What makes a genuine
+# settlement recognisable is not just that the arithmetic closes but
+# that it closes over MANY payments: Razorpay batches a period's
+# payments into one credit. A two-payment "settlement" discovered by
+# search is a coincidence wearing the right clothes.
+#
+# Path 1 (explicit settlement_id) is unaffected — a small settlement
+# with an ID attached is still resolved, because there the identifier,
+# not the arithmetic, is the evidence.
+MIN_SUBSET_SIZE_FOR_SEARCH_MATCH = 5
 SETTLEMENT_WINDOW_DAYS = 60
+
+# Path 2 (blind search) gets a much tighter window than path 1. A
+# settlement credits payments captured days earlier, not weeks — so the
+# wide window only ever helps a coincidence, never a genuine match.
+# Observed: a noise bank credit dated 14 Aug matching a payment from 24
+# Jul, twenty-one days apart, purely because the arithmetic closed.
+# Path 1 keeps the wide window because there the settlement_id is the
+# evidence and the date is only a sanity bound.
+SEARCH_WINDOW_DAYS = 10
 MAX_CANDIDATES_PER_TARGET = 60
 MAX_ITERATIONS_PER_TARGET = 200
 # Safety cap on the DP's bitset width (target + tolerance, in paise).
@@ -140,7 +163,7 @@ def find_by_settlement_id(bank_targets: list[dict], gateway_pool: list[dict]) ->
     return resolved
 
 
-def candidates_for(bank: dict, pool: list[dict]) -> list[dict]:
+def candidates_for(bank: dict, pool: list[dict], *, window_days: int = SETTLEMENT_WINDOW_DAYS) -> list[dict]:
     """Hard constraints applied BEFORE any search: same settlement date
     window (payment precedes the credit, within SETTLEMENT_WINDOW_DAYS),
     same currency when both sides declare one, and fee data present.
@@ -157,7 +180,7 @@ def candidates_for(bank: dict, pool: list[dict]) -> list[dict]:
     if not bank.get("txn_date"):
         return []
     bank_date = date.fromisoformat(bank["txn_date"])
-    window_start = bank_date - timedelta(days=SETTLEMENT_WINDOW_DAYS)
+    window_start = bank_date - timedelta(days=window_days)
     bank_currency = _currency_of(bank)
 
     out = []
@@ -576,7 +599,7 @@ def run_tier4(batch_id: str) -> dict:
     for bank in remaining_targets:
         available = [r for r in all_rows
                      if r["source_kind"] == GATEWAY_SOURCE and _awaiting_settlement(r)]
-        candidates = candidates_for(bank, available)
+        candidates = candidates_for(bank, available, window_days=SEARCH_WINDOW_DAYS)
 
         start = time.monotonic()
         # Exact first: a genuine settlement sum has zero rounding loss.
@@ -592,6 +615,12 @@ def run_tier4(batch_id: str) -> dict:
                 subset = None
             else:
                 used_tolerance = True
+
+        if subset and len(subset) < MIN_SUBSET_SIZE_FOR_SEARCH_MATCH:
+            # Applies to the exact hit too, not only the tolerance one —
+            # see MIN_SUBSET_SIZE_FOR_SEARCH_MATCH. Leave it for a human
+            # rather than assert a settlement the size of a coincidence.
+            subset = None
         elapsed = time.monotonic() - start
         max_elapsed = max(max_elapsed, elapsed)
 

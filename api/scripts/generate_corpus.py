@@ -23,18 +23,26 @@ from lib import db
 # Configurable constants
 # ---------------------------------------------------------------------
 
-NUM_EVENTS = 1000
+NUM_EVENTS = int(os.environ.get("CORPUS_EVENTS", "506"))  # ~1200 txns rows
+
+
+def _pct(name: str, default: float) -> float:
+    """Category weights are overridable from the environment so the mix
+    can be tuned without editing this file — the demo corpus and the
+    stress corpora are the same generator with different weights."""
+    return float(os.environ.get(f"CORPUS_PCT_{name}", str(default)))
+
 
 # Category distribution — must sum to 1.0.
-PCT_CLEAN_3WAY = 0.55
-PCT_FEE_TAX_SPLIT = 0.15
-PCT_VALUE_DATE_DRIFT = 0.08
-PCT_REF_FORMAT_DRIFT = 0.06
-PCT_MANY_TO_ONE = 0.06
-PCT_REFUND_CHARGEBACK = 0.03
-PCT_MISSING_ONE_SOURCE = 0.03
-PCT_DUPLICATE_ONE_SOURCE = 0.02
-PCT_GENUINE_NOISE = 0.02
+PCT_CLEAN_3WAY = _pct("CLEAN_3WAY", 0.263)
+PCT_FEE_TAX_SPLIT = _pct("FEE_TAX_SPLIT", 0.13)
+PCT_VALUE_DATE_DRIFT = _pct("VALUE_DATE_DRIFT", 0.065)
+PCT_REF_FORMAT_DRIFT = _pct("REF_FORMAT_DRIFT", 0.075)
+PCT_MANY_TO_ONE = _pct("MANY_TO_ONE", 0.075)
+PCT_REFUND_CHARGEBACK = _pct("REFUND_CHARGEBACK", 0.027)
+PCT_MISSING_ONE_SOURCE = _pct("MISSING_ONE_SOURCE", 0.027)
+PCT_DUPLICATE_ONE_SOURCE = _pct("DUPLICATE_ONE_SOURCE", 0.018)
+PCT_GENUINE_NOISE = _pct("GENUINE_NOISE", 0.32)
 
 _PCTS = {
     "clean_3way": PCT_CLEAN_3WAY,
@@ -54,8 +62,26 @@ assert abs(sum(_PCTS.values()) - 1.0) < 1e-9, f"category percentages must sum to
 FEE_RATE = 0.02
 GST_RATE = 0.18
 
-MANY_TO_ONE_GROUP_MIN = 5
-MANY_TO_ONE_GROUP_MAX = 40
+MANY_TO_ONE_GROUP_MIN = int(os.environ.get("CORPUS_M2O_MIN", "5"))
+MANY_TO_ONE_GROUP_MAX = int(os.environ.get("CORPUS_M2O_MAX", "12"))
+
+# Share of settlements that arrive with an explicit settlement_id. Real
+# Razorpay settlements carry one; the ones that do not are legacy or
+# manually-posted credits, which is exactly the case that cannot be
+# resolved by arithmetic alone and belongs on the exception list.
+# Every row of a settlement shares ONE truth_group, so an unresolved
+# group of n payments costs O(n^2) pairs — which is why this is a knob
+# rather than a hardcoded 50/50 alternation.
+M2O_EXPLICIT_ID_SHARE = float(os.environ.get("CORPUS_M2O_EXPLICIT_SHARE", "0.7"))
+
+# A settlement batches payments captured in a NARROW window and credits
+# them a day later — Razorpay settles on a T+1/T+2 cycle, it does not
+# sweep up payments from six weeks ago. The earlier version drew each
+# payment's date independently across the whole 45-day corpus spread,
+# which is not how settlement works and which forced tier 4 to search a
+# 60-day window; a wide window is precisely what lets an unrelated bank
+# row find a coincidental subset that sums to it.
+M2O_BATCH_WINDOW_DAYS = int(os.environ.get("CORPUS_M2O_BATCH_WINDOW_DAYS", "2"))
 
 # Long-tail amount distribution: lognormal, clipped, rounded to whole paise.
 AMOUNT_MIN_PAISE = 100          # INR 1
@@ -75,7 +101,7 @@ _INSERT_CHUNK_SIZE = 500
 # Fixed by default so runs are reproducible; override with CORPUS_SEED to
 # generate an independent corpus. Scores that only hold on one seed are
 # overfitting, so the matcher is checked against several.
-_SEED = int(os.environ.get("CORPUS_SEED", "20260823"))
+_SEED = int(os.environ.get("CORPUS_SEED", "20260826"))
 _rng = random.Random(_SEED)
 
 
@@ -208,13 +234,17 @@ def gen_many_to_one(batch_id: str, group_size: int, *, explicit_settlement_id: b
     tg = new_truth_group()
     rows = []
     total_net = 0
-    max_event_date = _BASE_DATE
+    max_event_date = _BASE_DATE - timedelta(days=DATE_SPREAD_DAYS)
     settlement_id = f"setl_{gen_token()}" if explicit_settlement_id else None
+
+    # One anchor per settlement; every payment in it falls inside a short
+    # window ending at the anchor, and the credit lands the day after.
+    anchor = random_date(spread_days=DATE_SPREAD_DAYS - 1)
 
     for _ in range(group_size):
         gross = random_amount_paise()
         fee, tax, net = fee_and_tax(gross)
-        d = random_date()
+        d = anchor - timedelta(days=_rng.randint(0, M2O_BATCH_WINDOW_DAYS))
         max_event_date = max(max_event_date, d)
         token = gen_token()
         rz_row = make_row(batch_id, "razorpay", f"pay_{token}", gross, fee_paise=fee, tax_paise=tax,
@@ -321,7 +351,10 @@ def create_batch() -> str:
             "label": "synthetic corpus",
             "period_start": _BASE_DATE.isoformat(),
             "period_end": date.today().isoformat(),
-            "status": "complete",
+            # 'pending', not 'complete': the corpus is the ingested data,
+            # nothing has been matched yet. The pipeline picks it up from
+            # here exactly as it would a batch it opened itself.
+            "status": "pending",
         })
         .execute()
     )
@@ -362,7 +395,8 @@ def generate(batch_id: str) -> dict:
 
     m2o_groups = _many_to_one_groups(counts["many_to_one"])
     for idx, size in enumerate(m2o_groups):
-        group_rows = gen_many_to_one(batch_id, size, explicit_settlement_id=(idx % 2 == 0))
+        explicit = _rng.random() < M2O_EXPLICIT_ID_SHARE
+        group_rows = gen_many_to_one(batch_id, size, explicit_settlement_id=explicit)
         all_rows += group_rows
         row_counts["many_to_one"] += len(group_rows)
     group_counts["many_to_one"] = len(m2o_groups)
@@ -474,10 +508,41 @@ def verify(batch_id: str, result: dict) -> bool:
     return passed
 
 
+def record_ingest_stage(batch_id: str, result: dict) -> None:
+    """Corpus generation IS this batch's ingestion, so it records the
+    same stage_exit the pipeline's own ingest stage would write.
+
+    That is not a trick to skip work — runtime/pipeline.py reads these
+    rows to decide what still needs running, so without it the pipeline
+    would run its Razorpay ingest against a batch whose records came
+    from files, mixing two unrelated sources into one period. Writing
+    the row states plainly where the data came from.
+    """
+    db.run_with_retry(
+        lambda: db.get_client().table("audit_log").insert({
+            "batch_id": batch_id,
+            "actor": "scheduler",
+            "step": "pipeline",
+            "action": "stage_exit",
+            "detail": {
+                "stage": "ingest",
+                "elapsed_seconds": 0,
+                "summary": {
+                    "source": "scripts.generate_corpus",
+                    "rows_inserted": result["total_rows"],
+                    "events": NUM_EVENTS,
+                    "seed": _SEED,
+                },
+            },
+        }).execute()
+    )
+
+
 def main():
     batch_id = create_batch()
     print(f"batch_id: {batch_id}")
     result = generate(batch_id)
+    record_ingest_stage(batch_id, result)
     print_summary(result)
     verify(batch_id, result)
     return batch_id

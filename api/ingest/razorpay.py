@@ -116,14 +116,31 @@ def _filter_already_ingested(batch_id: str, rows: list[dict]) -> list[dict]:
     posted twice), which is a real reconciliation scenario, not a bug."""
     if not rows:
         return []
-    existing = db.run_with_retry(
-        lambda: db.get_client()
-        .table("txns")
-        .select("source_kind,external_ref")
-        .eq("batch_id", batch_id)
-        .execute()
-    ).data
-    seen = {(r["source_kind"], r["external_ref"]) for r in existing}
+
+    # Paginated on purpose: PostgREST caps a single response at 1000
+    # rows. Reading only the first page would make this check silently
+    # incomplete on any batch past that size — every ref on page two
+    # would look new, and a re-run would duplicate it. Ordering by id is
+    # required too, because .range() without .order() is not stable
+    # across pages.
+    seen: set[tuple] = set()
+    offset = 0
+    page_size = 1000
+    while True:
+        page = db.run_with_retry(
+            lambda o=offset: db.get_client()
+            .table("txns")
+            .select("id,source_kind,external_ref")
+            .eq("batch_id", batch_id)
+            .order("id")
+            .range(o, o + page_size - 1)
+            .execute()
+        ).data
+        seen.update((r["source_kind"], r["external_ref"]) for r in page)
+        if len(page) < page_size:
+            break
+        offset += page_size
+
     return [r for r in rows if (r["source_kind"], r["external_ref"]) not in seen]
 
 
