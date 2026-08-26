@@ -1,5 +1,5 @@
 import { Panel, PanelHeader } from "@/components/primitives";
-import { QnaConsole } from "@/components/qna-console";
+import { QnaConsole, type Fact } from "@/components/qna-console";
 import { getBatch } from "@/lib/api";
 import { formatCount, formatPaise, formatRatio } from "@/lib/money";
 
@@ -10,7 +10,8 @@ export default async function QnaPage({ params }: PageProps<"/batches/[id]/qna">
 
   // The same figures the model is given, shown to the operator, so the
   // answer can be checked against its source rather than trusted.
-  let facts: { label: string; value: string }[] = [];
+  let facts: Fact[] = [];
+  let unavailable = false;
   try {
     const detail = await getBatch(id);
     const openStat = detail.variances_by_status.open;
@@ -25,33 +26,37 @@ export default async function QnaPage({ params }: PageProps<"/batches/[id]/qna">
       { label: "Match groups", value: formatCount(detail.totals.match_groups) },
     ];
   } catch {
-    /* The console still works without the fact panel; the answer itself
-       carries its own verification. */
+    unavailable = true;
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,320px)]">
-      <QnaConsole batchId={id} />
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,300px)]">
+      <QnaConsole batchId={id} facts={facts} />
 
       <Panel className="h-fit">
         <PanelHeader
           title="Figures available"
-          description="The answer can only be built from these. Anything else, and it is withheld."
+          description="An answer can only be built from these. Anything else, and it is withheld."
         />
-        <dl className="divide-y divide-border">
-          {facts.length === 0 ? (
-            <p className="px-4 py-4 text-[12px] text-muted-foreground">
-              Could not load this batch&apos;s figures.
-            </p>
-          ) : (
-            facts.map((fact) => (
-              <div key={fact.label} className="flex items-baseline justify-between gap-3 px-4 py-2">
+        {unavailable ? (
+          <p className="px-4 py-4 text-[12px] text-muted-foreground">
+            This batch&apos;s figures could not be read, so there is nothing to check an
+            answer against. Questions are still answered, and still verified against the
+            same records.
+          </p>
+        ) : (
+          <dl className="divide-y divide-border">
+            {facts.map((fact) => (
+              <div
+                key={fact.label}
+                className="flex items-baseline justify-between gap-3 px-4 py-1.5"
+              >
                 <dt className="text-[12px] text-muted-foreground">{fact.label}</dt>
                 <dd className="num text-[12px]">{fact.value}</dd>
               </div>
-            ))
-          )}
-        </dl>
+            ))}
+          </dl>
+        )}
       </Panel>
     </div>
   );

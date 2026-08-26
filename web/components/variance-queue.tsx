@@ -13,6 +13,7 @@ import {
   varianceSeverity,
 } from "@/components/primitives";
 import { actOnVariance, type TxnRecord, type Variance } from "@/lib/api";
+import { figureKey, markFigures, TRACED_MARK } from "@/lib/figures";
 import { formatDate, humanise, sourceLabel } from "@/lib/format";
 import {
   actionLabel,
@@ -502,62 +503,6 @@ function DecisionButton({
   );
 }
 
-/* ------------------------------------------------------------------ */
-/* traceability                                                        */
-/* ------------------------------------------------------------------ */
-
-/** Comparable form of a figure: digits and sign only, so "₹1,42,900.00"
- *  and "1,42,900.00" are recognised as the same amount. */
-function figureKey(value: string): string {
-  return value.replace(/[^\d.-]/g, "");
-}
-
-/**
- * Splits the explanation so every figure the model cited is rendered as
- * a mark rather than as prose. This is the whole point of the expanded
- * row: the operator should see which numbers came back out of the
- * records without holding two lists in their head and comparing them by
- * eye.
- */
-function markFigures(
-  text: string,
-  cited: string[],
-  untraceable: string[],
-): ReactNode[] {
-  if (cited.length === 0) return [text];
-
-  const untraceableKeys = new Set(untraceable.map(figureKey));
-  // Longest first: "₹1,42,900.00" must win over "900.00" inside it.
-  const ordered = [...cited].sort((a, b) => b.length - a.length);
-  const pattern = new RegExp(
-    `(${ordered.map((f) => f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`,
-    "g",
-  );
-
-  return text.split(pattern).map((part, index) => {
-    if (index % 2 === 0) return part;
-    const traceable = !untraceableKeys.has(figureKey(part));
-    return (
-      <mark
-        key={index}
-        title={
-          traceable
-            ? "Found in the records above"
-            : "Not found in any record above — this figure is not verified"
-        }
-        className={cn(
-          "num bg-transparent",
-          traceable
-            ? "text-foreground underline decoration-ok decoration-dotted underline-offset-[3px]"
-            : "bg-critical-bg font-medium text-critical",
-        )}
-      >
-        {part}
-      </mark>
-    );
-  });
-}
-
 function VarianceDetail({ variance }: { variance: Variance }) {
   const citedKeys = useMemo(
     () => new Set(variance.cited_figures.map(figureKey)),
@@ -715,7 +660,7 @@ function VarianceDetail({ variance }: { variance: Variance }) {
                             "num text-[11.5px]",
                             typeof value === "number" &&
                               citedKeys.has(figureKey(formatPaise(value))) &&
-                              "underline decoration-ok decoration-dotted underline-offset-[3px]",
+                              TRACED_MARK,
                           )}
                         >
                           {typeof value === "number" ? formatPaise(value) : String(value)}
@@ -733,7 +678,7 @@ function VarianceDetail({ variance }: { variance: Variance }) {
       {variance.cited_figures.length > 0 ? (
         <p className="border-t border-border pt-2.5 text-[11px] text-muted-foreground">
           In the explanation,{" "}
-          <span className="num underline decoration-ok decoration-dotted underline-offset-[3px]">
+          <span className={cn("num", TRACED_MARK)}>
             a dotted underline
           </span>{" "}
           marks a figure found in the records above.{" "}
@@ -755,7 +700,7 @@ function RecordRow({ record, cited }: { record: TxnRecord; cited: Set<string> })
    *  explanation marks it, so the two can be matched by shape. */
   const traced = (value: number | null) =>
     value !== null && cited.has(figureKey(formatPaise(value)))
-      ? "underline decoration-ok decoration-dotted underline-offset-[3px]"
+      ? TRACED_MARK
       : undefined;
 
   return (

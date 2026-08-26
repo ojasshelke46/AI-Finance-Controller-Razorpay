@@ -1,9 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { Panel, PanelHeader, Pill, Skeleton, StatusDot } from "@/components/primitives";
 import { askQuestion, type QnaResponse } from "@/lib/api";
+import { figureKey, markFigures, TRACED_MARK } from "@/lib/figures";
+import { formatCount } from "@/lib/money";
+import { cn } from "@/lib/utils";
 
 const SUGGESTIONS = [
   "Which matching tier contributed the most transactions, and how many?",
@@ -11,7 +14,9 @@ const SUGGESTIONS = [
   "What was the precision of this run, and how many false positives is that?",
 ];
 
-export function QnaConsole({ batchId }: { batchId: string }) {
+export type Fact = { label: string; value: string };
+
+export function QnaConsole({ batchId, facts }: { batchId: string; facts: Fact[] }) {
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState<QnaResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -26,19 +31,36 @@ export function QnaConsole({ batchId }: { batchId: string }) {
     try {
       setAnswer(await askQuestion(batchId, trimmed));
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "The question could not be answered");
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "The question could not be answered. Try again in a moment.",
+      );
     } finally {
       setLoading(false);
     }
   }
 
-  const guardFired = answer?.attempts.some((a) => (a.ungrounded_figures?.length ?? 0) > 0);
+  /** Which of the batch's own figures the answer actually quoted. This
+   *  is the traceability claim made concrete: not "trust this", but
+   *  "here is the figure, and here is the fact it came from". */
+  const used = useMemo(() => {
+    if (!answer?.verified) return [];
+    return facts.filter(
+      (fact) =>
+        figureKey(fact.value).length > 0 &&
+        figureKey(answer.answer).includes(figureKey(fact.value)),
+    );
+  }, [answer, facts]);
+
+  const untraceable = answer?.attempts.flatMap((a) => a.ungrounded_figures ?? []) ?? [];
+  const retried = (answer?.attempts.length ?? 0) > 1;
 
   return (
     <Panel>
       <PanelHeader
         title="Ask about this run"
-        description="Answers are built only from the figures listed alongside. Every number in the reply is checked against those figures before it is shown."
+        description="Answers are built only from the figures listed alongside. Every number in a reply is checked against those figures before it is shown, and an answer that cites anything else is withheld."
       />
 
       <form
@@ -96,78 +118,102 @@ export function QnaConsole({ batchId }: { batchId: string }) {
             <Skeleton className="h-3 w-full" />
             <Skeleton className="h-3 w-4/5" />
             <p className="pt-1 text-[11.5px] text-muted-foreground">
-              Generating, then verifying every figure against the run data…
+              Writing an answer, then checking every figure in it against this batch&apos;s
+              records.
             </p>
           </div>
         ) : error ? (
           <div className="border border-critical/30 bg-critical-bg px-3 py-2.5">
             <p className="text-[12.5px] text-critical">{error}</p>
+            <p className="mt-1 text-[11.5px] text-muted-foreground">
+              Nothing was answered. Ask again, or check that the reconciliation service is
+              running.
+            </p>
           </div>
         ) : answer ? (
           <div className="space-y-3" aria-live="polite">
             <p className="text-[12px] text-muted-foreground">{answer.question}</p>
 
-            <div
-              className={
-                answer.verified
-                  ? "border-l-2 border-ok pl-3"
-                  : "border-l-2 border-critical bg-critical-bg/40 py-2 pl-3"
-              }
-            >
-              <p className="text-[13px] leading-relaxed">{answer.answer}</p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
+            {/* The verdict comes before the words it applies to. */}
+            <div className="flex flex-wrap items-center gap-2">
               <Pill severity={answer.verified ? "ok" : "critical"}>
                 <StatusDot severity={answer.verified ? "ok" : "critical"} />
                 {answer.verified ? "Every figure traced" : "Withheld — untraceable figure"}
               </Pill>
-              {guardFired ? (
-                <Pill severity="warn">Guard fired · regenerated</Pill>
+              {retried ? (
+                <span className="text-[11px] text-muted-foreground">
+                  first draft cited a figure that could not be traced; regenerated once
+                </span>
               ) : null}
-              <span className="num text-[11px] text-muted-foreground">
-                {answer.attempts.length} attempt{answer.attempts.length === 1 ? "" : "s"} ·{" "}
-                {answer.context_chars} chars of context
-              </span>
             </div>
 
-            <details className="text-[11.5px]">
-              <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-                Verification detail
-              </summary>
-              <ul className="mt-2 space-y-1.5">
-                {answer.attempts.map((attempt) => (
-                  <li key={attempt.attempt} className="num flex flex-wrap gap-x-3">
-                    <span>attempt {attempt.attempt}</span>
-                    {attempt.error ? (
-                      <span className="text-critical">{attempt.error}</span>
-                    ) : (
-                      <>
-                        <span
-                          className={
-                            (attempt.ungrounded_figures?.length ?? 0) > 0
-                              ? "text-critical"
-                              : "text-ok"
-                          }
-                        >
-                          {(attempt.ungrounded_figures?.length ?? 0) > 0
-                            ? `untraceable: ${attempt.ungrounded_figures!.join(", ")}`
-                            : "all figures traced"}
-                        </span>
-                        <span className="text-muted-foreground">
-                          {attempt.latency_ms?.toFixed(0)}ms · {attempt.total_tokens ?? "—"} tokens
-                        </span>
-                      </>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </details>
+            <div
+              className={cn(
+                "border-l pl-3",
+                answer.verified ? "border-ok" : "border-critical bg-critical-bg/40 py-2",
+              )}
+            >
+              <p className="text-[13px] leading-relaxed">
+                {answer.verified
+                  ? markFigures(
+                      answer.answer,
+                      used.map((fact) => fact.value),
+                    )
+                  : answer.answer}
+              </p>
+            </div>
+
+            {answer.verified ? (
+              used.length > 0 ? (
+                <section>
+                  <h3 className="label mb-1.5">Figures this answer was built from</h3>
+                  <dl className="divide-y divide-border border-y border-border">
+                    {used.map((fact) => (
+                      <div
+                        key={fact.label}
+                        className="flex items-baseline justify-between gap-3 py-1.5"
+                      >
+                        <dt className="text-[12px] text-muted-foreground">{fact.label}</dt>
+                        <dd className={cn("num text-[12px]", TRACED_MARK)}>{fact.value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                  <p className="mt-1.5 text-[11px] text-muted-foreground">
+                    Each figure above appears in the answer and was read from this batch,
+                    not produced by the model.
+                  </p>
+                </section>
+              ) : (
+                <p className="text-[11.5px] text-muted-foreground">
+                  This answer quotes no figure, so there is nothing to trace. It passed the
+                  same check regardless.
+                </p>
+              )
+            ) : untraceable.length > 0 ? (
+              <section>
+                <h3 className="label mb-1.5">
+                  Figures that could not be traced ({formatCount(untraceable.length)})
+                </h3>
+                <ul className="flex flex-wrap gap-1.5">
+                  {untraceable.map((figure, index) => (
+                    <li key={`${figure}-${index}`}>
+                      <Pill severity="critical">
+                        <span className="num normal-case">{figure}</span>
+                      </Pill>
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-1.5 text-[11px] text-muted-foreground">
+                  These appeared in the draft but in none of this batch&apos;s records, so
+                  the draft was discarded rather than shown.
+                </p>
+              </section>
+            ) : null}
           </div>
         ) : (
           <p className="text-[12px] text-muted-foreground">
-            Ask a question about this run. If the data cannot answer it, the system says so
-            rather than estimating.
+            Ask a question about this run. If the figures alongside cannot answer it, the
+            system says so rather than estimating.
           </p>
         )}
       </div>
