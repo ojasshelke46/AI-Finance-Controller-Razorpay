@@ -9,31 +9,34 @@ import {
   PanelHeader,
   Pill,
   StatusDot,
-  batchSeverity,
 } from "@/components/primitives";
 import { ApiError, getStatus } from "@/lib/api";
-import { formatDateTime, formatSeconds, formatTime, humanise, relativeTime } from "@/lib/format";
-import { formatCount, formatPaise, formatPaiseCompact, formatPercent, formatRatio } from "@/lib/money";
+import { formatSeconds, formatTime, relativeTime } from "@/lib/format";
+import { actorLabel, eventLabel, jobLabel, stepLabel } from "@/lib/gloss";
+import { formatCount, formatPaise, formatPercent, formatRatio } from "@/lib/money";
 
 export const dynamic = "force-dynamic";
 
 /**
- * The autonomy proof. Everything here answers one question: is the
- * system doing the work without anyone touching it? So the scheduler
- * state, the last completed run, and the next scheduled run sit at the
- * top — a screenshot of this page should settle the question on its own.
+ * The autonomy proof. This page answers one question — is the system
+ * doing the work without anyone touching it — and everything at the top
+ * is evidence for that answer: the last run that finished, the next one
+ * already scheduled, and how many of the recent events a person caused.
+ *
+ * Money lives below that line. It matters, but it is not what this page
+ * is for, and when it took the largest figure on the screen it argued
+ * the opposite of the page's own claim.
  */
 export default async function StatusPage() {
   let status;
   try {
     status = await getStatus();
   } catch (error) {
-    const message = error instanceof ApiError ? error.message : "Unknown error";
     return (
       <ErrorState
         title="Cannot reach the reconciliation service"
-        detail={message}
-        hint="Start it with: cd api && uvicorn main:app --port 8000"
+        detail={error instanceof ApiError ? error.message : "Unknown error"}
+        hint="This page retries every 30 seconds. If it stays unreachable, the service needs restarting."
       />
     );
   }
@@ -49,139 +52,169 @@ export default async function StatusPage() {
     unexplained_paise,
     open_variance_count,
     recent_events,
+    server_time,
   } = status;
 
   const lastRunOk = last_run?.action === "batch_complete";
+  const operatorEvents = recent_events.filter((event) => event.actor === "human").length;
 
   return (
-    <div className="space-y-4">
-      <AutoRefresh seconds={30} />
-
-      {/* Autonomy banner ------------------------------------------------ */}
-      <Panel className={scheduler_running ? "border-ok/30" : "border-critical/40"}>
-        <div className="flex flex-col gap-4 px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex items-start gap-3">
+    <div className="space-y-5">
+      {/* Autonomy ------------------------------------------------------- */}
+      <section aria-labelledby="autonomy" className="border-b border-border-strong pb-5">
+        <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-2">
+          <div className="flex items-start gap-2.5">
             <StatusDot
               severity={scheduler_running ? "ok" : "critical"}
               live={scheduler_running}
               className="mt-[7px]"
             />
             <div>
-              <h1 className="text-[15px] font-semibold tracking-tight">
+              <h1 id="autonomy" className="text-[15px] font-semibold tracking-tight">
                 {scheduler_running
-                  ? "Scheduler running — no operator input required"
-                  : "Scheduler stopped"}
+                  ? "Running unattended"
+                  : "Stopped — nothing is being processed"}
               </h1>
               <p className="mt-0.5 max-w-prose text-[12px] text-muted-foreground">
                 {scheduler_running
-                  ? "Polling Razorpay for new activity, resuming stalled batches, retrying unexplained variances and writing a daily rollup, all on a fixed schedule."
-                  : "Nothing is being processed automatically. Start the API to resume autonomous operation."}
+                  ? "Polling Razorpay, resuming stalled batches, retrying unexplained variances and writing a daily rollup, all on a fixed schedule."
+                  : "No work is being picked up. Restart the reconciliation service to resume."}
               </p>
             </div>
           </div>
+          <AutoRefresh seconds={30} asOf={server_time} />
+        </div>
 
-          <dl className="grid shrink-0 grid-cols-2 gap-x-8 gap-y-3 sm:grid-cols-3">
+        <dl className="mt-4 grid grid-cols-2 gap-x-8 gap-y-4 sm:grid-cols-4">
+          <Metric
+            label="Last run finished"
+            size="lg"
+            value={last_run ? relativeTime(last_run.at) : "—"}
+            severity={last_run && !lastRunOk ? "critical" : undefined}
+            hint={
+              last_run ? (
+                <>
+                  {eventLabel(last_run.action)} · {formatSeconds(last_run.elapsed_seconds)} ·{" "}
+                  <span className="num">{formatTime(last_run.at)}</span>
+                </>
+              ) : (
+                "no run has finished yet"
+              )
+            }
+          />
+          <Metric
+            label="Next run due"
+            size="lg"
+            value={next_run_at ? relativeTime(next_run_at) : "—"}
+            hint={
+              next_run_at ? (
+                <span className="num">{formatTime(next_run_at)}</span>
+              ) : (
+                "nothing scheduled"
+              )
+            }
+          />
+          <Metric
+            label="Runs today"
+            value={formatCount(batches_created_today)}
+            hint={`${formatCount(batches_completed_today)} finished`}
+          />
+          <Metric
+            label="Operator actions"
+            value={formatCount(operatorEvents)}
+            severity={operatorEvents === 0 ? "ok" : "info"}
+            hint={
+              operatorEvents === 0
+                ? `none in the last ${formatCount(recent_events.length)} events`
+                : `of the last ${formatCount(recent_events.length)} events`
+            }
+          />
+        </dl>
+      </section>
+
+      {/* Where the work stands ------------------------------------------ */}
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <section aria-labelledby="exposure">
+          <h2 id="exposure" className="label mb-2.5">
+            Waiting on a person
+          </h2>
+          <dl className="grid grid-cols-2 gap-x-8 gap-y-3">
             <Metric
-              label="Last run"
-              value={last_run ? relativeTime(last_run.at) : "—"}
+              label="Unexplained value"
+              value={formatPaise(unexplained_paise)}
+              severity={unexplained_paise > 0 ? "warn" : "ok"}
+              hint="across every batch"
+            />
+            <Metric
+              label="Open variances"
+              value={formatCount(open_variance_count)}
+              severity={open_variance_count > 0 ? "warn" : "ok"}
               hint={
-                last_run ? (
-                  <span className="inline-flex items-center gap-1.5">
-                    <StatusDot severity={lastRunOk ? "ok" : "critical"} />
-                    {lastRunOk ? "completed" : "failed"} in{" "}
-                    {formatSeconds(last_run.elapsed_seconds)}
-                  </span>
+                open_variance_count > 0 ? (
+                  <Link
+                    href="/batches"
+                    className="text-accent underline-offset-2 hover:underline"
+                  >
+                    Find them in the batch list
+                  </Link>
                 ) : (
-                  "no completed run yet"
+                  "nothing to decide"
                 )
               }
             />
-            <Metric
-              label="Next run"
-              value={next_run_at ? relativeTime(next_run_at) : "—"}
-              hint={next_run_at ? formatTime(next_run_at) : "scheduler idle"}
-            />
-            <Metric
-              label="Batches today"
-              value={formatCount(batches_created_today)}
-              hint={`${formatCount(batches_completed_today)} completed`}
-            />
           </dl>
-        </div>
-      </Panel>
+        </section>
 
-      {/* Headline figures ---------------------------------------------- */}
-      <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
-        <Panel>
-          <PanelHeader
-            title="Unexplained exposure"
-            description="Open variances across every batch — the money a human still needs to decide on."
-            right={
-              <Pill severity={open_variance_count > 0 ? "warn" : "ok"}>
-                {formatCount(open_variance_count)} open
-              </Pill>
-            }
-          />
-          <div className="px-4 py-4">
-            <Metric
-              label="Total unexplained value"
-              value={formatPaise(unexplained_paise)}
-              size="lg"
-              severity={unexplained_paise > 0 ? "warn" : "ok"}
-              hint={
-                unexplained_paise > 0
-                  ? `${formatPaiseCompact(unexplained_paise)} sitting in the exception queue`
-                  : "Everything reconciled"
-              }
-            />
-          </div>
-        </Panel>
-
-        <Panel>
-          <PanelHeader
-            title="Most recent scored run"
-            description={
-              latest_score?.batch_id
-                ? `Batch ${latest_score.batch_id.slice(0, 8)} · ${formatDateTime(latest_score.run_at)}`
-                : "No run has been scored yet"
-            }
-            right={
-              latest_score?.batch_id ? (
-                <Link
-                  href={`/batches/${latest_score.batch_id}`}
-                  className="text-[12px] text-accent underline-offset-2 hover:underline"
-                >
-                  Open run →
-                </Link>
-              ) : null
-            }
-          />
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-4 px-4 py-4 sm:grid-cols-4">
-            <Metric label="Match rate" value={formatRatio(latest_score?.match_rate)} />
-            <Metric label="Precision" value={formatRatio(latest_score?.precision)} />
-            <Metric label="Recall" value={formatRatio(latest_score?.recall)} />
-            <Metric
-              label="Grounding"
-              value={formatPercent(latest_score?.explanation_grounding_pct)}
-              hint="explanations verified"
-            />
-          </dl>
-        </Panel>
+        <section aria-labelledby="scored">
+          <h2 id="scored" className="label mb-2.5 flex items-baseline justify-between gap-3">
+            Most recent scored run
+            {latest_score?.batch_id ? (
+              <Link
+                href={`/batches/${latest_score.batch_id}`}
+                className="text-[11.5px] tracking-normal text-accent normal-case underline-offset-2 hover:underline"
+              >
+                Open batch <span className="num">{latest_score.batch_id.slice(0, 8)}</span>
+              </Link>
+            ) : null}
+          </h2>
+          {latest_score ? (
+            <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
+              <Metric label="Match rate" value={formatRatio(latest_score.match_rate)} />
+              <Metric label="Precision" value={formatRatio(latest_score.precision)} />
+              <Metric label="Recall" value={formatRatio(latest_score.recall)} />
+              <Metric
+                label="Grounding"
+                value={formatPercent(latest_score.explanation_grounding_pct)}
+                hint="figures traced"
+              />
+            </dl>
+          ) : (
+            <p className="text-[12px] text-muted-foreground">
+              No run has been scored yet. Scores appear once a batch finishes with ground
+              truth available.
+            </p>
+          )}
+        </section>
       </div>
 
-      {/* Jobs + event stream ------------------------------------------- */}
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
+      {/* Evidence ------------------------------------------------------- */}
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
         <Panel>
-          <PanelHeader title="Scheduled jobs" description="Cadence and next fire time" />
+          <PanelHeader title="Scheduled jobs" description="What runs, and when it runs next" />
           {jobs.length === 0 ? (
             <p className="px-4 py-6 text-[12px] text-muted-foreground">
-              No jobs registered. The scheduler is not running.
+              No jobs are registered. The scheduler is not running.
             </p>
           ) : (
             <ul className="divide-y divide-border">
               {jobs.map((job) => (
-                <li key={job.id} className="flex items-baseline justify-between gap-3 px-4 py-2">
-                  <span className="min-w-0 truncate text-[12.5px]">{job.name}</span>
+                <li
+                  key={job.id}
+                  className="flex items-baseline justify-between gap-3 px-4 py-1.5"
+                >
+                  <span className="min-w-0 truncate text-[12.5px]">
+                    {jobLabel(job.id, job.name)}
+                  </span>
                   <span className="num shrink-0 text-[11.5px] text-muted-foreground">
                     {job.next_run_at ? relativeTime(job.next_run_at) : "paused"}
                   </span>
@@ -193,12 +226,18 @@ export default async function StatusPage() {
 
         <Panel>
           <PanelHeader
-            title="Live activity"
-            description="Newest audit events across all batches, written by the system as it works"
+            title="Recent activity"
+            description="The newest events across every batch, written by the system as it works"
+            right={
+              <span className="num text-[11.5px] text-muted-foreground">
+                {formatCount(recent_events.length)} events
+              </span>
+            }
           />
           {recent_events.length === 0 ? (
             <p className="px-4 py-6 text-[12px] text-muted-foreground">
-              Nothing recorded yet. Events appear here as soon as the scheduler picks up work.
+              Nothing recorded yet. Events appear here as soon as the scheduler picks up
+              work.
             </p>
           ) : (
             <ul className="divide-y divide-border">
@@ -209,24 +248,27 @@ export default async function StatusPage() {
                   // 60px + 88px + content + id row overflows the
                   // viewport and pushes the whole page sideways, so on
                   // phones it wraps instead.
-                  className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 px-4 py-1.5 sm:grid sm:grid-cols-[60px_88px_1fr_auto]"
+                  className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 px-4 py-1.5 sm:grid sm:grid-cols-[60px_84px_1fr_auto]"
                 >
-                  <span className="num text-[11.5px] text-muted-foreground">
+                  <time
+                    dateTime={event.created_at}
+                    className="num text-[11.5px] text-muted-foreground"
+                  >
                     {formatTime(event.created_at)}
-                  </span>
+                  </time>
                   <Pill severity={event.actor === "human" ? "info" : "neutral"}>
-                    {event.actor}
+                    {actorLabel(event.actor)}
                   </Pill>
                   <span className="min-w-0 truncate text-[12px]">
-                    {humanise(event.action)}
+                    {eventLabel(event.action)}
                     <span className="ml-2 text-[11.5px] text-muted-foreground">
-                      {event.step}
+                      {stepLabel(event.step)}
                     </span>
                   </span>
                   {event.batch_id ? (
                     <CopyableId id={event.batch_id} href={`/batches/${event.batch_id}`} />
                   ) : (
-                    <span className="text-[11.5px] text-muted-foreground">—</span>
+                    <span className="num text-[11.5px] text-muted-foreground">—</span>
                   )}
                 </li>
               ))}
