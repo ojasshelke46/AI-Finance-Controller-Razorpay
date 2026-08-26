@@ -19,6 +19,7 @@ export default async function AuditPage({ params, searchParams }: PageProps<"/ba
       <ErrorState
         title="Cannot load the audit trail"
         detail={error instanceof ApiError ? error.message : "Unknown error"}
+        hint="The trail reloads when the reconciliation service is reachable again."
       />
     );
   }
