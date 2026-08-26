@@ -272,14 +272,18 @@ export function Td({
   align = "left",
   mono = false,
   className,
+  title,
 }: {
   children: ReactNode;
   align?: "left" | "right" | "center";
   mono?: boolean;
   className?: string;
+  /** Hover detail for a cell that shows a shortened form of its value. */
+  title?: string;
 }) {
   return (
     <td
+      title={title}
       className={cn(
         "px-3 py-1.5 align-middle",
         align === "right" && "text-right",
