@@ -185,3 +185,38 @@ const JOB: Record<string, string> = {
 export function jobLabel(id: string, fallback: string): string {
   return JOB[id] ?? fallback ?? humanise(id);
 }
+
+/* ------------------------------------------------------------------ */
+/* variance status                                                     */
+/* ------------------------------------------------------------------ */
+
+const VARIANCE_STATUS: Record<string, string> = {
+  open: "Open",
+  explained: "Explained",
+  accepted: "Accepted",
+  written_off: "Written off",
+};
+
+export function varianceStatusLabel(value: string | null | undefined): string {
+  if (!value) return "—";
+  return VARIANCE_STATUS[value] ?? humanise(value);
+}
+
+/* ------------------------------------------------------------------ */
+/* batch status                                                        */
+/* ------------------------------------------------------------------ */
+
+const BATCH_STATUS: Record<string, string> = {
+  pending: "Pending",
+  ingesting: "Ingesting",
+  matching: "Matching",
+  explaining: "Explaining",
+  scoring: "Scoring",
+  complete: "Complete",
+  failed: "Failed",
+};
+
+export function batchStatusLabel(value: string | null | undefined): string {
+  if (!value) return "—";
+  return BATCH_STATUS[value] ?? humanise(value);
+}

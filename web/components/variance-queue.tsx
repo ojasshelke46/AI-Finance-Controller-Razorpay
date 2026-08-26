@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useOptimistic, useState, useTransition } from "react";
+import { useMemo, useOptimistic, useState, useTransition, type ReactNode } from "react";
 
 import {
   DataTable,
@@ -14,22 +14,31 @@ import {
 } from "@/components/primitives";
 import { actOnVariance, type TxnRecord, type Variance } from "@/lib/api";
 import { formatDate, humanise, sourceLabel } from "@/lib/format";
+import {
+  actionLabel,
+  categoryLabel,
+  strategyLabel,
+  varianceStatusLabel,
+} from "@/lib/gloss";
 import { formatCount, formatPaise, formatRatio } from "@/lib/money";
 import { cn } from "@/lib/utils";
 
-/** Plain-English gloss for each suggested action. The enum value alone
- *  means nothing to someone who has not read the prompt that produced
- *  it, and this queue has to be readable cold. */
-const ACTION_COPY: Record<string, string> = {
-  auto_accept: "Safe to accept without review",
-  book_to_fee_account: "Post to the payment-processing fee account",
-  await_next_settlement: "Expected to clear in the next settlement",
-  request_bank_advice: "Ask the bank for an advice note",
-  flag_for_human: "Needs a person to decide",
-  write_off: "Too small to chase — write it off",
+type SortKey = "value" | "confidence";
+
+/** Undecided work outranks decided work, whatever it is worth. Sorting
+ *  purely by value let a settled ₹5,00,000 row sit above an open
+ *  ₹4,00,000 one, which put the queue's own answer to "what next" below
+ *  a row nobody has to look at again. */
+const URGENCY: Record<string, number> = {
+  open: 0,
+  explained: 1,
+  accepted: 2,
+  written_off: 2,
 };
 
-type SortKey = "value" | "confidence";
+function urgency(status: string): number {
+  return URGENCY[status] ?? 1;
+}
 
 export function VarianceQueue({
   variances,
@@ -59,6 +68,8 @@ export function VarianceQueue({
   const sorted = useMemo(() => {
     const copy = [...optimistic];
     copy.sort((a, b) => {
+      const byUrgency = urgency(a.status) - urgency(b.status);
+      if (byUrgency !== 0) return byUrgency;
       const delta =
         sortKey === "value"
           ? Math.abs(a.variance_paise) - Math.abs(b.variance_paise)
@@ -68,8 +79,13 @@ export function VarianceQueue({
     return copy;
   }, [optimistic, sortKey, ascending]);
 
+  const undecided = optimistic.filter((v) => urgency(v.status) < 2);
   const openCount = optimistic.filter((v) => v.status === "open").length;
-  const totalValue = optimistic.reduce((sum, v) => sum + Math.abs(v.variance_paise), 0);
+  const undecidedValue = undecided.reduce((sum, v) => sum + Math.abs(v.variance_paise), 0);
+  const largestUndecided = undecided.reduce(
+    (max, v) => Math.max(max, Math.abs(v.variance_paise)),
+    0,
+  );
 
   function toggleSort(key: SortKey) {
     if (key === sortKey) {
@@ -84,14 +100,31 @@ export function VarianceQueue({
     <Panel>
       <PanelHeader
         title="Variance queue"
-        description="Every discrepancy the matcher could not resolve on its own, largest first. Expand a row to see the underlying records and why the system reached its conclusion."
-        right={
-          <span className="num text-[11.5px] text-muted-foreground">
-            {formatCount(optimistic.length)} shown · {formatCount(openCount)} open ·{" "}
-            {formatPaise(totalValue)}
-          </span>
-        }
+        description="Every discrepancy the matcher could not settle on its own. Undecided first, then largest value. Expand a row for the records behind it and how the conclusion was reached."
       />
+
+      {/* The queue's own headline: what is still undecided, and how big
+          the worst of it is. Stated once here rather than left for the
+          operator to find by reading down the value column. */}
+      <dl className="flex flex-wrap items-baseline gap-x-8 gap-y-2 border-b border-border px-4 py-2.5">
+        <Figure
+          label="Still undecided"
+          value={formatCount(undecided.length)}
+          severity={openCount > 0 ? "warn" : undefined}
+          hint={`of ${formatCount(optimistic.length)} shown`}
+        />
+        <Figure
+          label="Undecided value"
+          value={formatPaise(undecidedValue)}
+          severity={undecidedValue > 0 ? "warn" : undefined}
+        />
+        <Figure
+          label="Largest single"
+          value={formatPaise(largestUndecided)}
+          severity={largestUndecided > 0 ? "warn" : undefined}
+          hint={undecided.length > 0 ? "top of the queue" : undefined}
+        />
+      </dl>
 
       <Filters
         batchId={batchId}
@@ -102,10 +135,14 @@ export function VarianceQueue({
 
       {sorted.length === 0 ? (
         <EmptyState
-          title="Nothing in the queue"
+          title={
+            activeCategory || activeStatus
+              ? "Nothing matches these filters"
+              : "Nothing in the queue"
+          }
           description={
             activeCategory || activeStatus
-              ? "No variance matches these filters. Clear them to see the whole queue."
+              ? "No variance in this batch has that combination of status and category. Clear the filters to see the whole queue."
               : "Every record in this batch reconciled cleanly. There is nothing for an operator to decide."
           }
         />
@@ -157,13 +194,44 @@ export function VarianceQueue({
   );
 }
 
+/** A label and a figure on one baseline. Used only in the queue's
+ *  summary strip, where three of them sit in a row — never alone, and
+ *  never inside a container of its own. */
+function Figure({
+  label,
+  value,
+  hint,
+  severity,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  severity?: "warn" | "critical";
+}) {
+  return (
+    <div className="flex items-baseline gap-2">
+      <dt className="label">{label}</dt>
+      <dd
+        className={cn(
+          "num text-[13px] font-medium",
+          severity === "warn" && "text-warn",
+          severity === "critical" && "text-critical",
+        )}
+      >
+        {value}
+      </dd>
+      {hint ? <span className="text-[11px] text-muted-foreground">{hint}</span> : null}
+    </div>
+  );
+}
+
 function SortButton({
   children,
   active,
   ascending,
   onClick,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   active: boolean;
   ascending: boolean;
   onClick: () => void;
@@ -220,7 +288,7 @@ function Filters({
             href={link({ category: activeCategory, status })}
             active={activeStatus === status}
           >
-            {humanise(status)}
+            {varianceStatusLabel(status)}
           </FilterChip>
         ))}
       </FilterGroup>
@@ -236,7 +304,7 @@ function Filters({
               href={link({ status: activeStatus, category })}
               active={activeCategory === category}
             >
-              {humanise(category)}
+              {categoryLabel(category)}
             </FilterChip>
           ))}
         </FilterGroup>
@@ -245,7 +313,7 @@ function Filters({
   );
 }
 
-function FilterGroup({ label, children }: { label: string; children: React.ReactNode }) {
+function FilterGroup({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       <span className="label mr-0.5">{label}</span>
@@ -261,7 +329,7 @@ function FilterChip({
 }: {
   href: string;
   active: boolean;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <a
@@ -341,14 +409,14 @@ function VarianceRow({
           {formatPaise(variance.variance_paise)}
         </Td>
         <Td className="whitespace-nowrap">
-          <span className="text-[12px]">{humanise(variance.category)}</span>
+          <span className="text-[12px]">{categoryLabel(variance.category)}</span>
           {variance.subcategory ? (
             <span className="block text-[11px] text-muted-foreground">
-              {variance.subcategory}
+              {humanise(variance.subcategory)}
             </span>
           ) : null}
         </Td>
-        <Td className="max-w-[420px]">
+        <Td className="max-w-[380px]">
           <p className="truncate text-[12px]" title={variance.explanation ?? undefined}>
             {variance.explanation ?? (
               <span className="text-muted-foreground">Not yet explained</span>
@@ -360,11 +428,15 @@ function VarianceRow({
             {variance.confidence === null ? "—" : formatRatio(variance.confidence, 0)}
           </span>
         </Td>
-        <Td className="whitespace-nowrap text-[12px]">
-          {variance.suggested_action ? humanise(variance.suggested_action) : "—"}
+        <Td className="max-w-[220px] text-[12px]">
+          <span className="block truncate" title={actionLabel(variance.suggested_action)}>
+            {actionLabel(variance.suggested_action)}
+          </span>
         </Td>
         <Td>
-          <Pill severity={varianceSeverity(variance.status)}>{humanise(variance.status)}</Pill>
+          <Pill severity={varianceSeverity(variance.status)}>
+            {varianceStatusLabel(variance.status)}
+          </Pill>
         </Td>
         <Td align="right">
           {decided ? (
@@ -407,7 +479,7 @@ function DecisionButton({
   disabled,
   subtle,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   onClick: () => void;
   disabled?: boolean;
   subtle?: boolean;
@@ -430,140 +502,262 @@ function DecisionButton({
   );
 }
 
+/* ------------------------------------------------------------------ */
+/* traceability                                                        */
+/* ------------------------------------------------------------------ */
+
+/** Comparable form of a figure: digits and sign only, so "₹1,42,900.00"
+ *  and "1,42,900.00" are recognised as the same amount. */
+function figureKey(value: string): string {
+  return value.replace(/[^\d.-]/g, "");
+}
+
+/**
+ * Splits the explanation so every figure the model cited is rendered as
+ * a mark rather than as prose. This is the whole point of the expanded
+ * row: the operator should see which numbers came back out of the
+ * records without holding two lists in their head and comparing them by
+ * eye.
+ */
+function markFigures(
+  text: string,
+  cited: string[],
+  untraceable: string[],
+): ReactNode[] {
+  if (cited.length === 0) return [text];
+
+  const untraceableKeys = new Set(untraceable.map(figureKey));
+  // Longest first: "₹1,42,900.00" must win over "900.00" inside it.
+  const ordered = [...cited].sort((a, b) => b.length - a.length);
+  const pattern = new RegExp(
+    `(${ordered.map((f) => f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`,
+    "g",
+  );
+
+  return text.split(pattern).map((part, index) => {
+    if (index % 2 === 0) return part;
+    const traceable = !untraceableKeys.has(figureKey(part));
+    return (
+      <mark
+        key={index}
+        title={
+          traceable
+            ? "Found in the records above"
+            : "Not found in any record above — this figure is not verified"
+        }
+        className={cn(
+          "num bg-transparent",
+          traceable
+            ? "text-foreground underline decoration-ok decoration-dotted underline-offset-[3px]"
+            : "bg-critical-bg font-medium text-critical",
+        )}
+      >
+        {part}
+      </mark>
+    );
+  });
+}
+
 function VarianceDetail({ variance }: { variance: Variance }) {
+  const citedKeys = useMemo(
+    () => new Set(variance.cited_figures.map(figureKey)),
+    [variance.cited_figures],
+  );
+  const untraceableKeys = useMemo(
+    () => new Set(variance.untraceable_figures.map(figureKey)),
+    [variance.untraceable_figures],
+  );
+
   return (
-    <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,340px)]">
-      <div className="space-y-4">
-        <section>
-          <h3 className="label mb-2">
-            Records involved ({formatCount(variance.records.length)})
-          </h3>
-          {variance.records.length === 0 ? (
-            <p className="text-[12px] text-muted-foreground">
-              No underlying record is attached to this variance.
-            </p>
-          ) : (
-            <div className="overflow-x-auto border border-border bg-surface">
-              <table className="w-full border-collapse text-[12px]">
-                <thead className="bg-muted">
-                  <tr className="border-b border-border">
-                    <Th>Source</Th>
-                    <Th>Reference</Th>
-                    <Th align="right">Amount</Th>
-                    <Th align="right">Fee</Th>
-                    <Th align="right">Tax</Th>
-                    <Th align="right">Net</Th>
-                    <Th>Date</Th>
-                    <Th>Description</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {variance.records.map((record) => (
-                    <RecordRow key={record.txn_id} record={record} />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-
-        {variance.match_group ? (
-          <section>
-            <h3 className="label mb-2">Matching history</h3>
-            <p className="text-[12px]">
-              Grouped by{" "}
-              <span className="font-medium">tier {variance.match_group.tier}</span> using{" "}
-              <span className="num">{variance.match_group.strategy}</span> at{" "}
-              {formatRatio(variance.match_group.confidence, 0)} confidence, leaving a residual
-              of{" "}
-              <span className="num">
-                {formatPaise(variance.match_group.total_variance_paise ?? 0)}
-              </span>
-              .
-            </p>
-            {variance.match_group.variance_components ? (
-              <dl className="mt-2 flex flex-wrap gap-x-6 gap-y-1">
-                {Object.entries(variance.match_group.variance_components).map(([key, value]) => (
-                  <div key={key} className="flex items-baseline gap-2">
-                    <dt className="text-[11px] text-muted-foreground">{humanise(key)}</dt>
-                    <dd className="num text-[12px]">
-                      {typeof value === "number" ? formatPaise(value) : String(value)}
-                    </dd>
-                  </div>
+    <div className="space-y-4">
+      {/* Records first: the explanation below refers back to these, so
+          they have to have been read already. */}
+      <section>
+        <h3 className="label mb-2">
+          Records involved ({formatCount(variance.records.length)})
+        </h3>
+        {variance.records.length === 0 ? (
+          <p className="text-[12px] text-muted-foreground">
+            No underlying record is attached to this variance. Nothing in the explanation
+            below can be checked against source data.
+          </p>
+        ) : (
+          <div className="overflow-x-auto border border-border bg-surface">
+            <table className="w-full border-collapse text-[12px]">
+              <thead className="bg-muted">
+                <tr className="border-b border-border">
+                  <Th>Source</Th>
+                  <Th>Reference</Th>
+                  <Th align="right">Amount</Th>
+                  <Th align="right">Fee</Th>
+                  <Th align="right">Tax</Th>
+                  <Th align="right">Net</Th>
+                  <Th>Date</Th>
+                  <Th>Description</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {variance.records.map((record) => (
+                  <RecordRow key={record.txn_id} record={record} cited={citedKeys} />
                 ))}
-              </dl>
-            ) : null}
-          </section>
-        ) : null}
-      </div>
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
 
-      <div className="space-y-4">
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,300px)]">
         <section>
           <h3 className="label mb-2">Explanation</h3>
           {variance.explanation ? (
-            <p className="text-[12.5px] leading-relaxed">{variance.explanation}</p>
+            <>
+              <p className="text-[12.5px] leading-relaxed">
+                {markFigures(
+                  variance.explanation,
+                  variance.cited_figures,
+                  variance.untraceable_figures,
+                )}
+              </p>
+
+              {variance.cited_figures.length > 0 ? (
+                <p
+                  className={cn(
+                    "mt-2.5 text-[11.5px]",
+                    variance.all_figures_traceable ? "text-muted-foreground" : "text-critical",
+                  )}
+                >
+                  {variance.all_figures_traceable
+                    ? "Every marked figure was found in the records above."
+                    : `${formatCount(variance.untraceable_figures.length)} marked figure${
+                        variance.untraceable_figures.length === 1 ? "" : "s"
+                      } could not be found in the records above — treat this explanation with suspicion.`}
+                </p>
+              ) : (
+                <p className="mt-2.5 text-[11.5px] text-muted-foreground">
+                  The explanation cites no specific figure, so there is nothing to trace.
+                </p>
+              )}
+
+              {variance.untraceable_figures.length > 0 ? (
+                <ul className="mt-2 flex flex-wrap gap-1.5">
+                  {variance.untraceable_figures.map((figure, index) => (
+                    <li key={`${figure}-${index}`}>
+                      <Pill severity="critical">
+                        <span className="num normal-case">{figure}</span>
+                      </Pill>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </>
           ) : (
             <p className="text-[12px] text-muted-foreground">
               No explanation was produced. The model declined to classify this case rather
               than guess.
             </p>
           )}
+        </section>
 
-          <dl className="mt-3 space-y-1.5">
-            <div className="flex items-baseline justify-between gap-3">
-              <dt className="text-[11.5px] text-muted-foreground">Confidence</dt>
-              <dd className="num text-[12px]">
-                {variance.confidence === null ? "—" : formatRatio(variance.confidence, 0)}
-              </dd>
-            </div>
-            <div className="flex items-baseline justify-between gap-3">
-              <dt className="text-[11.5px] text-muted-foreground">Suggested action</dt>
-              <dd className="text-right text-[12px]">
-                {variance.suggested_action ? humanise(variance.suggested_action) : "—"}
-              </dd>
-            </div>
-          </dl>
-          {variance.suggested_action && ACTION_COPY[variance.suggested_action] ? (
-            <p className="mt-1.5 text-[11.5px] text-muted-foreground">
-              {ACTION_COPY[variance.suggested_action]}
+        <section className="space-y-3">
+          <div>
+            <h3 className="label mb-2">Assessment</h3>
+            <dl className="space-y-1.5">
+              <div className="flex items-baseline justify-between gap-3">
+                <dt className="text-[11.5px] text-muted-foreground">Confidence</dt>
+                <dd
+                  className={cn(
+                    "num text-[12px]",
+                    (variance.confidence ?? 0) < 0.5 && "text-warn",
+                  )}
+                >
+                  {variance.confidence === null ? "—" : formatRatio(variance.confidence, 0)}
+                </dd>
+              </div>
+              <div className="flex items-baseline justify-between gap-3">
+                <dt className="text-[11.5px] text-muted-foreground">Suggested action</dt>
+                <dd className="max-w-[190px] text-right text-[12px]">
+                  {actionLabel(variance.suggested_action)}
+                </dd>
+              </div>
+            </dl>
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              Confidence and the suggested action are the model&apos;s, not the
+              matcher&apos;s. Neither is arithmetic.
             </p>
+          </div>
+
+          {variance.match_group ? (
+            <div className="border-t border-border pt-3">
+              <h3 className="label mb-2">Matching history</h3>
+              <p className="text-[11.5px] leading-relaxed">
+                Grouped at{" "}
+                <span className="font-medium">tier {variance.match_group.tier}</span> by{" "}
+                {strategyLabel(variance.match_group.strategy)}, at{" "}
+                <span className="num">
+                  {formatRatio(variance.match_group.confidence, 0)}
+                </span>{" "}
+                confidence, leaving{" "}
+                <span className="num">
+                  {formatPaise(variance.match_group.total_variance_paise ?? 0)}
+                </span>{" "}
+                unaccounted for.
+              </p>
+              {variance.match_group.variance_components ? (
+                <dl className="mt-2 space-y-1">
+                  {Object.entries(variance.match_group.variance_components).map(
+                    ([key, value]) => (
+                      <div key={key} className="flex items-baseline justify-between gap-3">
+                        <dt className="text-[11px] text-muted-foreground">
+                          {humanise(key)}
+                        </dt>
+                        <dd
+                          className={cn(
+                            "num text-[11.5px]",
+                            typeof value === "number" &&
+                              citedKeys.has(figureKey(formatPaise(value))) &&
+                              "underline decoration-ok decoration-dotted underline-offset-[3px]",
+                          )}
+                        >
+                          {typeof value === "number" ? formatPaise(value) : String(value)}
+                        </dd>
+                      </div>
+                    ),
+                  )}
+                </dl>
+              ) : null}
+            </div>
           ) : null}
         </section>
-
-        <section>
-          <h3 className="label mb-2">Cited amounts</h3>
-          {variance.cited_figures.length === 0 ? (
-            <p className="text-[11.5px] text-muted-foreground">
-              The explanation cites no specific figure.
-            </p>
-          ) : (
-            <>
-              <ul className="flex flex-wrap gap-1.5">
-                {variance.cited_figures.map((figure, index) => {
-                  const traceable = !variance.untraceable_figures.includes(figure);
-                  return (
-                    <li key={`${figure}-${index}`}>
-                      <Pill severity={traceable ? "ok" : "critical"}>
-                        <span className="num normal-case">{figure}</span>
-                      </Pill>
-                    </li>
-                  );
-                })}
-              </ul>
-              <p className="mt-2 text-[11.5px] text-muted-foreground">
-                {variance.all_figures_traceable
-                  ? "Every figure in this explanation was found in the records above."
-                  : "Highlighted figures could not be traced to the records above — treat this explanation with suspicion."}
-              </p>
-            </>
-          )}
-        </section>
       </div>
+
+      {variance.cited_figures.length > 0 ? (
+        <p className="border-t border-border pt-2.5 text-[11px] text-muted-foreground">
+          In the explanation,{" "}
+          <span className="num underline decoration-ok decoration-dotted underline-offset-[3px]">
+            a dotted underline
+          </span>{" "}
+          marks a figure found in the records above.{" "}
+          <span className="num bg-critical-bg px-1 font-medium text-critical">
+            A red figure
+          </span>{" "}
+          was not found in any of them.
+          {untraceableKeys.size > 0
+            ? " A figure the records cannot account for is the model's own, and nothing above supports it."
+            : ""}
+        </p>
+      ) : null}
     </div>
   );
 }
 
-function RecordRow({ record }: { record: TxnRecord }) {
+function RecordRow({ record, cited }: { record: TxnRecord; cited: Set<string> }) {
+  /** A record amount the explanation quoted is marked the same way the
+   *  explanation marks it, so the two can be matched by shape. */
+  const traced = (value: number | null) =>
+    value !== null && cited.has(figureKey(formatPaise(value)))
+      ? "underline decoration-ok decoration-dotted underline-offset-[3px]"
+      : undefined;
+
   return (
     <tr className="border-b border-border last:border-0">
       <Td>
@@ -572,16 +766,24 @@ function RecordRow({ record }: { record: TxnRecord }) {
       <Td mono className="text-[11.5px]">
         {record.external_ref ?? <span className="text-muted-foreground">none</span>}
       </Td>
-      <Td align="right" mono>
+      <Td align="right" mono className={traced(record.amount_paise)}>
         {formatPaise(record.amount_paise)}
       </Td>
-      <Td align="right" mono className="text-muted-foreground">
+      <Td
+        align="right"
+        mono
+        className={cn("text-muted-foreground", traced(record.fee_paise))}
+      >
         {record.fee_paise === null ? "—" : formatPaise(record.fee_paise)}
       </Td>
-      <Td align="right" mono className="text-muted-foreground">
+      <Td
+        align="right"
+        mono
+        className={cn("text-muted-foreground", traced(record.tax_paise))}
+      >
         {record.tax_paise === null ? "—" : formatPaise(record.tax_paise)}
       </Td>
-      <Td align="right" mono>
+      <Td align="right" mono className={traced(record.net_paise)}>
         {record.net_paise === null ? "—" : formatPaise(record.net_paise)}
       </Td>
       <Td className="whitespace-nowrap text-[11.5px]">{formatDate(record.txn_date)}</Td>

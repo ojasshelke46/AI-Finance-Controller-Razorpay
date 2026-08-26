@@ -22,7 +22,7 @@ export default async function VariancesPage({
       <ErrorState
         title="Cannot load the variance queue"
         detail={error instanceof ApiError ? error.message : "Unknown error"}
-        hint="The reconciliation API may not be running."
+        hint="This batch's variances could not be read. The queue reloads when the service is reachable again."
       />
     );
   }
