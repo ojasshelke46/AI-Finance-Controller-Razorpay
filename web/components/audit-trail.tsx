@@ -199,7 +199,7 @@ export function AuditTrail({
                           <dt className="text-[11px] text-muted-foreground">
                             {humanise(key)}
                           </dt>
-                          <dd className="num min-w-0 truncate text-right text-[11.5px]">
+                          <dd className="num min-w-0 text-right text-[11.5px] break-words">
                             {formatValue(value)}
                           </dd>
                         </div>

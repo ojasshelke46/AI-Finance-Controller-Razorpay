@@ -369,7 +369,7 @@ function VarianceRow({
   const [inFlight, setInFlight] = useState<"accept" | "write_off" | null>(null);
 
   const decided = variance.status === "accepted" || variance.status === "written_off";
-  const lowConfidence = (variance.confidence ?? 0) < 0.5;
+  const lowConfidence = variance.confidence !== null && variance.confidence < 0.5;
 
   function decide(action: "accept" | "write_off") {
     setError(null);
@@ -427,7 +427,7 @@ function VarianceRow({
             </span>
           ) : null}
         </Td>
-        <Td className="max-w-[380px]">
+        <Td className="max-w-[260px]">
           <p className="truncate text-[12px]" title={variance.explanation ?? undefined}>
             {variance.explanation ?? (
               <span className="text-muted-foreground">Not yet explained</span>
@@ -439,10 +439,8 @@ function VarianceRow({
             {variance.confidence === null ? "—" : formatRatio(variance.confidence, 0)}
           </span>
         </Td>
-        <Td className="max-w-[220px] text-[12px]">
-          <span className="block truncate" title={actionLabel(variance.suggested_action)}>
-            {actionLabel(variance.suggested_action)}
-          </span>
+        <Td className="text-[12px] whitespace-nowrap">
+          {actionLabel(variance.suggested_action)}
         </Td>
         <Td>
           <Pill severity={varianceSeverity(variance.status)}>
@@ -548,13 +546,97 @@ function DecisionButton({
   );
 }
 
+/**
+ * Gross - fee - tax = net, and whether that net is what the bank paid.
+ *
+ * Every figure is read from the records; nothing here comes from the
+ * model. Returns null unless the records actually carry the parts, so
+ * the chain is never assembled out of assumptions.
+ */
+function reconstruction(variance: Variance) {
+  const source = variance.records.find(
+    (r) => r.source_kind === "razorpay" && r.fee_paise !== null && r.tax_paise !== null,
+  );
+  const bank = variance.records.find((r) => r.source_kind === "bank");
+  if (!source || !bank) return null;
+
+  const fee = source.fee_paise ?? 0;
+  const tax = source.tax_paise ?? 0;
+  const net = source.amount_paise - fee - tax;
+  return {
+    gross: source.amount_paise,
+    fee,
+    tax,
+    net,
+    credited: bank.amount_paise,
+    difference: net - bank.amount_paise,
+  };
+}
+
 function VarianceDetail({ variance }: { variance: Variance }) {
   const citedKeys = useMemo(
     () => new Set(variance.cited_figures.map(figureKey)),
     [variance.cited_figures],
   );
+  const chain = reconstruction(variance);
+  const refused = !variance.all_figures_traceable && variance.cited_figures.length > 0;
+  const declined = variance.explanation === null;
+
   return (
     <div className="space-y-4">
+      {refused || declined ? (
+        <section className="border border-critical/40 bg-critical-bg/50 px-3 py-2.5">
+          <h3 className="text-[13px] font-semibold text-critical">
+            {refused ? "This explanation was refused" : "The system declined to explain this"}
+          </h3>
+          <p className="mt-1 max-w-prose text-[12.5px]">
+            {refused ? (
+              <>
+                {formatCount(variance.untraceable_figures.length)} figure
+                {variance.untraceable_figures.length === 1 ? "" : "s"} in it could not be
+                found in any record below, so the explanation was not accepted. A figure the
+                records cannot account for is the model&apos;s own.
+              </>
+            ) : (
+              <>
+                No explanation was produced. The model was given these records and declined
+                to classify the case rather than offer a plausible answer.
+              </>
+            )}
+          </p>
+        </section>
+      ) : null}
+
+      {chain ? (
+        <section>
+          <h3 className="label mb-2">Arithmetic</h3>
+          <div className="overflow-x-auto border border-border bg-surface px-3 py-2.5">
+            <p className="num flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[14px] whitespace-nowrap">
+              <Term label="gross" value={formatPaise(chain.gross)} />
+              <Operator>-</Operator>
+              <Term label="fee" value={formatPaise(chain.fee)} />
+              <Operator>-</Operator>
+              <Term label="GST" value={formatPaise(chain.tax)} />
+              <Operator>=</Operator>
+              <Term label="net" value={formatPaise(chain.net)} />
+              <Operator>{chain.difference === 0 ? "=" : "\u2260"}</Operator>
+              <Term label="bank credit" value={formatPaise(chain.credited)} />
+            </p>
+            <p
+              className={cn(
+                "mt-2 text-[12px]",
+                chain.difference === 0 ? "text-ok" : "text-warn",
+              )}
+            >
+              {chain.difference === 0
+                ? "The reconstructed net equals the bank credit, to the paise."
+                : `The reconstructed net is ${formatPaise(Math.abs(chain.difference))} ${
+                    chain.difference > 0 ? "above" : "below"
+                  } the bank credit.`}
+            </p>
+          </div>
+        </section>
+      ) : null}
       {/* Records first: the explanation below refers back to these, so
           they have to have been read already. */}
       <section>
@@ -648,8 +730,7 @@ function VarianceDetail({ variance }: { variance: Variance }) {
             </>
           ) : (
             <p className="text-[12px] text-muted-foreground">
-              No explanation was produced. The model declined to classify this case rather
-              than guess.
+              Nothing was written for this variance. The records above are all there is.
             </p>
           )}
         </section>
@@ -663,7 +744,7 @@ function VarianceDetail({ variance }: { variance: Variance }) {
                 <dd
                   className={cn(
                     "num text-[12px]",
-                    (variance.confidence ?? 0) < 0.5 && "text-warn",
+                    variance.confidence !== null && variance.confidence < 0.5 && "text-warn",
                   )}
                 >
                   {variance.confidence === null ? "—" : formatRatio(variance.confidence, 0)}
@@ -730,6 +811,21 @@ function VarianceDetail({ variance }: { variance: Variance }) {
   );
 }
 
+/** A figure with the word for what it is, so the chain reads as a
+ *  sentence rather than as a row of amounts. */
+function Term({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="inline-flex items-baseline gap-1.5">
+      <span className="font-medium">{value}</span>
+      <span className="text-[11px] font-normal text-muted-foreground">{label}</span>
+    </span>
+  );
+}
+
+function Operator({ children }: { children: ReactNode }) {
+  return <span className="text-muted-foreground">{children}</span>;
+}
+
 function RecordRow({ record, cited }: { record: TxnRecord; cited: Set<string> }) {
   /** A record amount the explanation quoted is marked the same way the
    *  explanation marks it, so the two can be matched by shape. */
@@ -768,9 +864,10 @@ function RecordRow({ record, cited }: { record: TxnRecord; cited: Set<string> })
       </Td>
       <Td className="whitespace-nowrap text-[11.5px]">{formatDate(record.txn_date)}</Td>
       <Td className="max-w-[260px]">
-        <span className="block truncate text-[11.5px]" title={record.description ?? undefined}>
-          {record.description ?? "—"}
-        </span>
+        {/* Wraps rather than clipping: this table is on screen while an
+            operator reads the arithmetic above it, and a narration that
+            ends in an ellipsis is a fact the reader cannot check. */}
+        <span className="block text-[11.5px]">{record.description ?? "—"}</span>
       </Td>
     </tr>
   );

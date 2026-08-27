@@ -263,7 +263,7 @@ function Funnel({
           single descent rather than as stacked rows. */}
       <span
         aria-hidden
-        className="absolute top-4 bottom-4 left-[19px] w-px bg-border"
+        className="absolute top-5 bottom-5 left-[20px] w-px bg-border-strong"
       />
       {funnel.map((step) => {
         const before = total > 0 ? claimed / total : 0;
@@ -300,32 +300,41 @@ function FunnelRung({
   const body = (
     <>
       <div className="flex items-baseline justify-between gap-3">
-        <span className={cn("text-[12.5px]", (isTotal || isVariance) && "font-medium", isVariance && "text-warn")}>
+        <span
+          className={cn(
+            "text-[13px] font-medium",
+            isVariance && "text-warn",
+          )}
+        >
           {step.label}
-          <span className="ml-2 text-[11px] text-muted-foreground">
+          <span className="ml-2 text-[11.5px] font-normal text-muted-foreground">
             {strategyLabel(step.strategy)}
           </span>
         </span>
-        <span className="num shrink-0 text-[12.5px]">
-          {formatCount(step.txns)}
-          <span className="ml-2 text-[11px] text-muted-foreground">
+        <span className="shrink-0 whitespace-nowrap">
+          <span className={cn("num text-[17px] leading-6 font-semibold", isVariance && "text-warn")}>
+            {formatCount(step.txns)}
+          </span>
+          <span className="num ml-2 text-[13px] text-muted-foreground">
             {(share * 100).toFixed(1)}%
           </span>
         </span>
       </div>
 
-      <div className="mt-1 flex h-1.5 w-full overflow-hidden rounded-[2px] bg-muted">
+      <div className="mt-1.5 flex h-2.5 w-full overflow-hidden rounded-[2px] bg-muted">
         {/* what earlier tiers already took */}
-        <div className="h-full bg-border" style={{ width: `${before * 100}%` }} />
+        <div className="h-full bg-border-strong" style={{ width: `${before * 100}%` }} />
         {/* what this step claims */}
         <div
-          className={cn("h-full", isVariance ? "bg-warn" : "bg-border-strong")}
+          className={cn("h-full", isVariance ? "bg-warn" : "bg-muted-foreground")}
           style={{ width: `${Math.max(share * 100, step.txns > 0 ? 0.6 : 0)}%` }}
         />
       </div>
 
-      <div className="mt-1 flex items-baseline justify-between gap-3 text-[11px] text-muted-foreground">
-        <span>{step.groups !== null ? `${formatCount(step.groups)} groups` : ""}</span>
+      <div className="mt-1 flex items-baseline justify-between gap-3 text-[11.5px] text-muted-foreground">
+        <span className="num">
+          {step.groups !== null ? `${formatCount(step.groups)} groups` : ""}
+        </span>
         {step.residual_paise !== 0 ? (
           <span className="num">residual {formatPaise(step.residual_paise)}</span>
         ) : null}
@@ -334,11 +343,11 @@ function FunnelRung({
   );
 
   return (
-    <li className="relative flex gap-3 py-1.5">
+    <li className="relative flex gap-3 py-2">
       <span
         aria-hidden
         className={cn(
-          "relative z-10 mt-[5px] size-[7px] shrink-0 rounded-[1px] ring-2 ring-surface",
+          "relative z-10 mt-[7px] size-[9px] shrink-0 rounded-[1px] ring-2 ring-surface",
           isVariance ? "bg-warn" : "bg-border-strong",
         )}
       />
