@@ -13,7 +13,8 @@ import {
 } from "@/components/primitives";
 import { ApiError, getStatus } from "@/lib/api";
 import { formatSeconds, formatTime, relativeTime } from "@/lib/format";
-import { actorLabel, eventLabel, jobLabel, stepLabel } from "@/lib/gloss";
+import { cn } from "@/lib/utils";
+import { actorLabel, eventLabel, eventTone, jobLabel, stepLabel } from "@/lib/gloss";
 import { formatCount, formatPaise, formatPercent, formatRatio } from "@/lib/money";
 
 export const dynamic = "force-dynamic";
@@ -149,7 +150,7 @@ export default async function StatusPage() {
       </section>
 
       {/* Where the work stands ------------------------------------------ */}
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <section aria-labelledby="exposure">
           <h2 id="exposure" className="label mb-2.5">
             Waiting on a person
@@ -222,7 +223,7 @@ export default async function StatusPage() {
       </div>
 
       {/* Evidence ------------------------------------------------------- */}
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
         <Panel>
           <PanelHeader title="Scheduled jobs" description="What runs, and when it runs next" />
           {jobs.length === 0 ? (
@@ -283,7 +284,7 @@ export default async function StatusPage() {
                   <Pill severity={event.actor === "human" ? "info" : "neutral"}>
                     {actorLabel(event.actor)}
                   </Pill>
-                  <span className="min-w-0 truncate text-[12px]">
+                  <span className={cn("min-w-0 truncate text-[12px]", eventTone(event.action))}>
                     {eventLabel(event.action)}
                     <span className="ml-2 text-[11.5px] text-muted-foreground">
                       {stepLabel(event.step)}

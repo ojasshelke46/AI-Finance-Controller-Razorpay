@@ -35,6 +35,11 @@ export default async function BatchOverviewPage({ params }: PageProps<"/batches/
   const { score, funnel, totals, variances_by_status, variances_by_category, batch } = detail;
   const totalRecords = funnel[0]?.txns ?? 0;
   const unmatched = totals.txns - totals.matched_txns;
+  // Zero unexplained is only good news on a run that reached the end.
+  // On a failed or still-running batch it means "never got that far",
+  // and painting it ok would tell the operator the opposite.
+  const finished = batch.status === "complete";
+  const clear = (value: number) => (value > 0 ? "warn" : finished ? "ok" : undefined);
 
   return (
     <div className="space-y-4">
@@ -46,7 +51,7 @@ export default async function BatchOverviewPage({ params }: PageProps<"/batches/
         />
       ) : null}
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,300px)]">
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,300px)]">
         {/* The funnel ---------------------------------------------------- */}
         <Panel>
           <PanelHeader
@@ -95,12 +100,12 @@ export default async function BatchOverviewPage({ params }: PageProps<"/batches/
               <Metric
                 label="Unexplained"
                 value={formatPaise(score?.unexplained_paise ?? 0)}
-                severity={(score?.unexplained_paise ?? 0) > 0 ? "warn" : "ok"}
+                severity={clear(score?.unexplained_paise ?? 0)}
               />
               <Metric
                 label="Open variances"
                 value={formatCount(variances_by_status.open?.count ?? 0)}
-                severity={(variances_by_status.open?.count ?? 0) > 0 ? "warn" : "ok"}
+                severity={clear(variances_by_status.open?.count ?? 0)}
               />
             </dl>
             <ul className="divide-y divide-border border-t border-border">
@@ -134,7 +139,7 @@ export default async function BatchOverviewPage({ params }: PageProps<"/batches/
               description={
                 score
                   ? "Scored pair by pair against ground truth. Precision is prioritised: a false match corrupts a ledger silently, an unmatched row only waits."
-                  : "This run has not been scored yet."
+                  : undefined
               }
             />
             {score ? (

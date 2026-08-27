@@ -5,7 +5,7 @@ import { useState } from "react";
 import { EmptyState, Panel, PanelHeader } from "@/components/primitives";
 import type { AuditEvent } from "@/lib/api";
 import { formatDate, formatTime, humanise } from "@/lib/format";
-import { actorLabel, eventLabel, stepLabel } from "@/lib/gloss";
+import { actorLabel, eventLabel, eventTone, stepLabel } from "@/lib/gloss";
 import { formatCount } from "@/lib/money";
 import { cn } from "@/lib/utils";
 
@@ -17,13 +17,6 @@ import { cn } from "@/lib/utils";
  * marked in the margin, because in an otherwise autonomous record that
  * is the notable event.
  */
-function toneFor(action: string | null): string | undefined {
-  if (!action) return undefined;
-  if (action.includes("failed") || action.includes("crashed")) return "text-critical";
-  if (action.includes("skipped")) return "text-warn";
-  return undefined;
-}
-
 export function AuditTrail({
   batchId,
   events,
@@ -128,7 +121,7 @@ export function AuditTrail({
               index === 0 ||
               formatDate(previous?.created_at) !== formatDate(event.created_at);
             const byOperator = event.actor === "human";
-            const tone = toneFor(event.action);
+            const tone = eventTone(event.action);
 
             return (
               <li key={id}>

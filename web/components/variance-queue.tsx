@@ -20,6 +20,7 @@ import { formatDate, humanise, sourceLabel } from "@/lib/format";
 import {
   actionLabel,
   categoryLabel,
+  componentLabel,
   strategyLabel,
   varianceStatusLabel,
 } from "@/lib/gloss";
@@ -552,11 +553,6 @@ function VarianceDetail({ variance }: { variance: Variance }) {
     () => new Set(variance.cited_figures.map(figureKey)),
     [variance.cited_figures],
   );
-  const untraceableKeys = useMemo(
-    () => new Set(variance.untraceable_figures.map(figureKey)),
-    [variance.untraceable_figures],
-  );
-
   return (
     <div className="space-y-4">
       {/* Records first: the explanation below refers back to these, so
@@ -595,7 +591,7 @@ function VarianceDetail({ variance }: { variance: Variance }) {
         )}
       </section>
 
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,300px)]">
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,300px)]">
         <section>
           <h3 className="label mb-2">Explanation</h3>
           {variance.explanation ? (
@@ -637,6 +633,17 @@ function VarianceDetail({ variance }: { variance: Variance }) {
                     </li>
                   ))}
                 </ul>
+              ) : null}
+
+              {variance.cited_figures.length > 0 ? (
+                <p className="mt-3 border-t border-border pt-2.5 text-[11px] text-muted-foreground">
+                  <span className={cn("num", TRACED_MARK)}>A dotted underline</span> marks a
+                  figure found in the records above.{" "}
+                  <span className="num bg-critical-bg px-1 font-medium text-critical">
+                    A red figure
+                  </span>{" "}
+                  was not found in any of them, and nothing above supports it.
+                </p>
               ) : null}
             </>
           ) : (
@@ -697,7 +704,7 @@ function VarianceDetail({ variance }: { variance: Variance }) {
                     ([key, value]) => (
                       <div key={key} className="flex items-baseline justify-between gap-3">
                         <dt className="text-[11px] text-muted-foreground">
-                          {humanise(key)}
+                          {componentLabel(key)}
                         </dt>
                         <dd
                           className={cn(
@@ -719,22 +726,6 @@ function VarianceDetail({ variance }: { variance: Variance }) {
         </section>
       </div>
 
-      {variance.cited_figures.length > 0 ? (
-        <p className="border-t border-border pt-2.5 text-[11px] text-muted-foreground">
-          In the explanation,{" "}
-          <span className={cn("num", TRACED_MARK)}>
-            a dotted underline
-          </span>{" "}
-          marks a figure found in the records above.{" "}
-          <span className="num bg-critical-bg px-1 font-medium text-critical">
-            A red figure
-          </span>{" "}
-          was not found in any of them.
-          {untraceableKeys.size > 0
-            ? " A figure the records cannot account for is the model's own, and nothing above supports it."
-            : ""}
-        </p>
-      ) : null}
     </div>
   );
 }

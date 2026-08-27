@@ -220,3 +220,35 @@ export function batchStatusLabel(value: string | null | undefined): string {
   if (!value) return "—";
   return BATCH_STATUS[value] ?? humanise(value);
 }
+
+/* ------------------------------------------------------------------ */
+/* event severity                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A failed stage has to read as failed wherever it appears. The status
+ * page and the audit trail both show the same events, so they share one
+ * rule rather than each having their own.
+ */
+export function eventTone(action: string | null | undefined): string | undefined {
+  if (!action) return undefined;
+  if (action.includes("failed") || action.includes("crashed")) return "text-critical";
+  if (action.includes("skipped")) return "text-warn";
+  return undefined;
+}
+
+/** Keys inside match_group.variance_components. The stored keys are
+ *  named in paise; the values are rendered in rupees, so the label must
+ *  not claim otherwise. */
+const COMPONENT: Record<string, string> = {
+  fee_paise: "Fee",
+  tax_paise: "Tax",
+  rounding_paise: "Rounding",
+  fx_paise: "FX",
+  refund_paise: "Refund",
+  residual_paise: "Residual",
+};
+
+export function componentLabel(value: string): string {
+  return COMPONENT[value] ?? humanise(value.replace(/_paise$/, ""));
+}
