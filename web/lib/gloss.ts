@@ -108,6 +108,13 @@ const STEP: Record<string, string> = {
   variance_queue: "Variance queue",
   console: "Console",
   rollup: "Daily rollup",
+  scheduler: "Scheduler",
+  ingest_razorpay: "Razorpay ingest",
+  gate_check: "Gate check",
+  tier1_exact: "Tier 1, exact match",
+  tier2_normalised: "Tier 2, normalised match",
+  tier3_fee_aware: "Tier 3, fee aware",
+  tier4_aggregate: "Tier 4, aggregate",
 };
 
 export function stepLabel(value: string | null | undefined): string {
@@ -145,6 +152,16 @@ const ACTION_EVENT: Record<string, string> = {
   retry_nothing_unexplained: "Checked for unexplained variances — none",
   job_crashed: "Scheduled job crashed",
   daily_rollup: "Wrote the daily rollup",
+  // explainer and audit
+  batch_explained: "Explained a batch of variances",
+  critic_batch_graded: "Graded a batch of explanations",
+  audit_complete: "Explanation audit finished",
+  records_skipped: "Records skipped",
+  // console and ingestion
+  variance_accept: "Operator accepted a variance",
+  insert_test_row: "Wrote a test row",
+  start: "Started",
+  finish: "Finished",
 };
 
 export function eventLabel(value: string | null | undefined): string {
