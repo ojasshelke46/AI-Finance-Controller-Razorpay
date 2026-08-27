@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { AutoRefresh } from "@/components/auto-refresh";
+import { LiveFigure } from "@/components/live-figure";
 import {
   CopyableId,
   ErrorState,
@@ -66,7 +67,6 @@ export default async function StatusPage() {
           <div className="flex items-start gap-2.5">
             <StatusDot
               severity={scheduler_running ? "ok" : "critical"}
-              live={scheduler_running}
               className="mt-[7px]"
             />
             <div>
@@ -89,7 +89,11 @@ export default async function StatusPage() {
           <Metric
             label="Last run finished"
             size="lg"
-            value={last_run ? relativeTime(last_run.at) : "—"}
+            value={
+              <LiveFigure value={last_run?.at ?? "none"}>
+                {last_run ? relativeTime(last_run.at) : "—"}
+              </LiveFigure>
+            }
             severity={last_run && !lastRunOk ? "critical" : undefined}
             hint={
               last_run ? (
@@ -105,7 +109,11 @@ export default async function StatusPage() {
           <Metric
             label="Next run due"
             size="lg"
-            value={next_run_at ? relativeTime(next_run_at) : "—"}
+            value={
+              <LiveFigure value={next_run_at ?? "none"}>
+                {next_run_at ? relativeTime(next_run_at) : "—"}
+              </LiveFigure>
+            }
             hint={
               next_run_at ? (
                 <span className="num">{formatTime(next_run_at)}</span>
@@ -116,12 +124,20 @@ export default async function StatusPage() {
           />
           <Metric
             label="Runs today"
-            value={formatCount(batches_created_today)}
+            value={
+              <LiveFigure value={String(batches_created_today)}>
+                {formatCount(batches_created_today)}
+              </LiveFigure>
+            }
             hint={`${formatCount(batches_completed_today)} finished`}
           />
           <Metric
             label="Operator actions"
-            value={formatCount(operatorEvents)}
+            value={
+              <LiveFigure value={String(operatorEvents)}>
+                {formatCount(operatorEvents)}
+              </LiveFigure>
+            }
             severity={operatorEvents === 0 ? "ok" : "info"}
             hint={
               operatorEvents === 0
@@ -141,13 +157,21 @@ export default async function StatusPage() {
           <dl className="grid grid-cols-2 gap-x-8 gap-y-3">
             <Metric
               label="Unexplained value"
-              value={formatPaise(unexplained_paise)}
+              value={
+                <LiveFigure value={String(unexplained_paise)}>
+                  {formatPaise(unexplained_paise)}
+                </LiveFigure>
+              }
               severity={unexplained_paise > 0 ? "warn" : "ok"}
               hint="across every batch"
             />
             <Metric
               label="Open variances"
-              value={formatCount(open_variance_count)}
+              value={
+                <LiveFigure value={String(open_variance_count)}>
+                  {formatCount(open_variance_count)}
+                </LiveFigure>
+              }
               severity={open_variance_count > 0 ? "warn" : "ok"}
               hint={
                 open_variance_count > 0 ? (

@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
 
+import { SectionTransition } from "@/components/section-transition";
+
 import "./globals.css";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
@@ -46,7 +48,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         </header>
 
         <main id="main" className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-5 md:px-6">
-          {children}
+          <SectionTransition>{children}</SectionTransition>
         </main>
 
         <footer className="border-t border-border px-4 py-3 md:px-6">
@@ -64,7 +66,7 @@ function NavLink({ href, children }: { href: string; children: React.ReactNode }
   return (
     <Link
       href={href}
-      className="rounded-sm px-2 py-1.5 text-[12.5px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      className="rounded-sm px-2 py-1.5 text-[12.5px] text-muted-foreground hover:bg-muted hover:text-foreground"
     >
       {children}
     </Link>

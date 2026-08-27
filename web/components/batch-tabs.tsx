@@ -30,7 +30,7 @@ export function BatchTabs({ id }: { id: string }) {
                 href={href}
                 aria-current={active ? "page" : undefined}
                 className={cn(
-                  "inline-flex h-9 items-center border-b-2 px-3 text-[12.5px] whitespace-nowrap transition-colors",
+                  "inline-flex h-9 items-center border-b-2 px-3 text-[12.5px] whitespace-nowrap",
                   active
                     ? "border-accent font-medium text-foreground"
                     : "border-transparent text-muted-foreground hover:text-foreground",

@@ -87,7 +87,15 @@ export function QnaConsole({ batchId, facts }: { batchId: string; facts: Fact[] 
           <button
             type="submit"
             disabled={loading || question.trim().length === 0}
-            className="min-h-[34px] rounded-sm border border-border-strong px-3 text-[12.5px] font-medium whitespace-nowrap transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+            aria-busy={loading}
+            className={cn(
+              "min-h-[34px] rounded-sm border border-border-strong px-3 text-[12.5px] font-medium whitespace-nowrap hover:bg-muted",
+              "transition-opacity duration-[var(--duration-feedback)] ease-[var(--ease-out)]",
+              "disabled:cursor-not-allowed disabled:opacity-50",
+              // In flight is not the same as unavailable: the button
+              // stays at full strength while it is working.
+              loading && "opacity-100 disabled:opacity-100",
+            )}
           >
             {loading ? "Checking…" : "Ask"}
           </button>
@@ -103,7 +111,7 @@ export function QnaConsole({ batchId, facts }: { batchId: string; facts: Fact[] 
                 ask(suggestion);
               }}
               disabled={loading}
-              className="rounded-sm border border-border px-2 py-[3px] text-left text-[11.5px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+              className="rounded-sm border border-border px-2 py-[3px] text-left text-[11.5px] text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
             >
               {suggestion}
             </button>

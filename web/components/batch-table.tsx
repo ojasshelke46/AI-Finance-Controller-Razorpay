@@ -147,7 +147,7 @@ export function BatchTable({ batches }: { batches: BatchSummary[] }) {
             <tr
               key={batch.id}
               className={cn(
-                "border-b border-border transition-colors last:border-0",
+                "border-b border-border last:border-0",
                 failedRow && "bg-critical-bg/50 hover:bg-critical-bg",
                 stalledRow && "bg-warn-bg/50 hover:bg-warn-bg",
                 !failedRow && !stalledRow && "hover:bg-muted/50",

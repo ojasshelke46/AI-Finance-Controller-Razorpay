@@ -340,7 +340,7 @@ function FunnelRung({
       {isVariance ? (
         <Link
           href={`/batches/${batchId}/variances`}
-          className="block min-w-0 flex-1 rounded-sm px-1 transition-colors hover:bg-muted/70"
+          className="block min-w-0 flex-1 rounded-sm px-1 hover:bg-muted/70"
         >
           {body}
         </Link>

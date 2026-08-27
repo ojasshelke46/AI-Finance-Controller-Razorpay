@@ -142,7 +142,7 @@ export function AuditTrail({
                   className={cn(
                     // Fixed tracks only once there is room for them; at
                     // 375px the columns would push the page sideways.
-                    "flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-b border-border px-4 py-1.5 transition-colors",
+                    "flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-b border-border px-4 py-1.5",
                     "sm:grid sm:grid-cols-[auto_58px_76px_92px_1fr]",
                     byOperator && "border-l border-l-info",
                     open ? "bg-muted/70" : "hover:bg-muted/40",
@@ -153,7 +153,7 @@ export function AuditTrail({
                     onClick={() => setOpenId(open ? null : id)}
                     disabled={!hasDetail}
                     aria-expanded={open}
-                    className="flex size-5 items-center justify-center self-center rounded-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-25"
+                    className="flex size-5 items-center justify-center self-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-25"
                   >
                     <span aria-hidden className="text-[10px]">
                       {hasDetail ? (open ? "▼" : "▶") : "·"}
@@ -295,7 +295,7 @@ function Chip({
       href={href}
       aria-current={active ? "true" : undefined}
       className={cn(
-        "rounded-sm border px-2 py-[3px] text-[11.5px] transition-colors",
+        "rounded-sm border px-2 py-[3px] text-[11.5px]",
         active
           ? "border-accent/40 bg-accent/10 font-medium text-foreground"
           : "border-border text-muted-foreground hover:bg-muted hover:text-foreground",

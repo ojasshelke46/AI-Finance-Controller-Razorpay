@@ -67,11 +67,9 @@ export function Pill({
 
 export function StatusDot({
   severity = "neutral",
-  live = false,
   className,
 }: {
   severity?: Severity;
-  live?: boolean;
   className?: string;
 }) {
   const color: Record<Severity, string> = {
@@ -87,7 +85,6 @@ export function StatusDot({
       className={cn(
         "inline-block size-[7px] shrink-0 rounded-full",
         color[severity],
-        live && "live-dot",
         className,
       )}
     />

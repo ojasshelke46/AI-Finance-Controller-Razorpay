@@ -63,7 +63,7 @@ export function AutoRefresh({
           router.refresh();
           setRemaining(seconds);
         }}
-        className="rounded-sm border border-border px-2 py-[3px] text-[11px] transition-colors hover:bg-muted"
+        className="rounded-sm border border-border px-2 py-[3px] text-[11px] hover:bg-muted"
       >
         Refresh now
       </button>

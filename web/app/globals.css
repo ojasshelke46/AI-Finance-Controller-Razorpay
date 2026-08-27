@@ -38,6 +38,16 @@
 
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+
+  /* Motion. Four animations exist in this console and they all come
+     from here: variance row expansion, a figure changing under a live
+     update, section navigation, and in-flight feedback on an action the
+     operator triggered. Nothing else moves — severity colour is the only
+     thing that should pull the eye on a screen of 150 rows. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --duration-feedback: 120ms;
+  --duration-orient: 140ms;
+  --duration-expand: 200ms;
 }
 
 :root {
@@ -158,51 +168,20 @@ body {
   }
 }
 
+/* Reduced motion. The four animations that exist each carry their own
+   reduced-motion variant, keeping the opacity change that makes a state
+   legible and dropping the size change that moves layout. This block is
+   the backstop for anything that slips in without one. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
-}
-
-@keyframes pulse-dot {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.35;
-  }
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .live-dot {
-    animation: pulse-dot 2.4s ease-in-out infinite;
-  }
-}
-
-@keyframes skeleton {
-  0% {
-    opacity: 0.55;
-  }
-  50% {
-    opacity: 0.28;
-  }
-  100% {
-    opacity: 0.55;
   }
 }
 
 .skeleton {
   background: var(--muted);
   border-radius: 3px;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .skeleton {
-    animation: skeleton 1.6s ease-in-out infinite;
-  }
 }

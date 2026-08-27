@@ -2,6 +2,8 @@
 
 import { useMemo, useOptimistic, useState, useTransition, type ReactNode } from "react";
 
+import { useDisclosure } from "@/lib/use-disclosure";
+
 import {
   DataTable,
   EmptyState,
@@ -54,7 +56,8 @@ export function VarianceQueue({
   activeCategory?: string;
   activeStatus?: string;
 }) {
-  const [expanded, setExpanded] = useState<string | null>(null);
+  // 200ms, matching --duration-expand in globals.css.
+  const { mountedId, openId, toggle } = useDisclosure(200);
   const [sortKey, setSortKey] = useState<SortKey>("value");
   const [ascending, setAscending] = useState(false);
 
@@ -182,10 +185,9 @@ export function VarianceQueue({
             <VarianceRow
               key={variance.id}
               variance={variance}
-              expanded={expanded === variance.id}
-              onToggle={() =>
-                setExpanded((current) => (current === variance.id ? null : variance.id))
-              }
+              mounted={mountedId === variance.id}
+              open={openId === variance.id}
+              onToggle={() => toggle(variance.id)}
               applyOptimistic={applyOptimistic}
             />
           ))}
@@ -337,7 +339,7 @@ function FilterChip({
       href={href}
       aria-current={active ? "true" : undefined}
       className={cn(
-        "rounded-sm border px-2 py-[3px] text-[11.5px] transition-colors",
+        "rounded-sm border px-2 py-[3px] text-[11.5px]",
         active
           ? "border-accent/40 bg-accent/10 font-medium text-foreground"
           : "border-border text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -350,23 +352,27 @@ function FilterChip({
 
 function VarianceRow({
   variance,
-  expanded,
+  mounted,
+  open,
   onToggle,
   applyOptimistic,
 }: {
   variance: Variance;
-  expanded: boolean;
+  mounted: boolean;
+  open: boolean;
   onToggle: () => void;
   applyOptimistic: (update: { id: string; status: string }) => void;
 }) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [inFlight, setInFlight] = useState<"accept" | "write_off" | null>(null);
 
   const decided = variance.status === "accepted" || variance.status === "written_off";
   const lowConfidence = (variance.confidence ?? 0) < 0.5;
 
   function decide(action: "accept" | "write_off") {
     setError(null);
+    setInFlight(action);
     startTransition(async () => {
       applyOptimistic({
         id: variance.id,
@@ -376,6 +382,8 @@ function VarianceRow({
         await actOnVariance(variance.id, action);
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : "Could not save that decision");
+      } finally {
+        setInFlight(null);
       }
     });
   }
@@ -384,8 +392,9 @@ function VarianceRow({
     <>
       <tr
         className={cn(
-          "border-b border-border transition-colors",
-          expanded ? "bg-muted/70" : "hover:bg-muted/50",
+          "border-b border-border",
+          open ? "bg-muted/70" : "hover:bg-muted/50",
+          "transition-opacity duration-[var(--duration-feedback)] ease-[var(--ease-out)]",
           pending && "opacity-60",
         )}
       >
@@ -393,15 +402,15 @@ function VarianceRow({
           <button
             type="button"
             onClick={onToggle}
-            aria-expanded={expanded}
+            aria-expanded={open}
             aria-controls={`variance-detail-${variance.id}`}
-            className="flex size-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="flex size-6 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             <span aria-hidden className="text-[10px]">
-              {expanded ? "▼" : "▶"}
+              {open ? "▼" : "▶"}
             </span>
             <span className="sr-only">
-              {expanded ? "Hide details for" : "Show details for"} variance of{" "}
+              {open ? "Hide details for" : "Show details for"} variance of{" "}
               {formatPaise(variance.variance_paise)}
             </span>
           </button>
@@ -444,11 +453,20 @@ function VarianceRow({
             <span className="text-[11.5px] text-muted-foreground">Decided</span>
           ) : (
             <div className="flex justify-end gap-1">
-              <DecisionButton onClick={() => decide("accept")} disabled={pending}>
-                Accept
+              <DecisionButton
+                onClick={() => decide("accept")}
+                disabled={pending}
+                pending={inFlight === "accept"}
+              >
+                {inFlight === "accept" ? "Saving…" : "Accept"}
               </DecisionButton>
-              <DecisionButton onClick={() => decide("write_off")} disabled={pending} subtle>
-                Write off
+              <DecisionButton
+                onClick={() => decide("write_off")}
+                disabled={pending}
+                pending={inFlight === "write_off"}
+                subtle
+              >
+                {inFlight === "write_off" ? "Saving…" : "Write off"}
               </DecisionButton>
             </div>
           )}
@@ -463,10 +481,29 @@ function VarianceRow({
         </tr>
       ) : null}
 
-      {expanded ? (
-        <tr id={`variance-detail-${variance.id}`} className="border-b border-border-strong">
-          <td colSpan={8} className="bg-surface-raised px-4 py-4">
-            <VarianceDetail variance={variance} />
+      {mounted ? (
+        <tr
+          id={`variance-detail-${variance.id}`}
+          className={cn("bg-surface-raised", open && "border-b border-border-strong")}
+        >
+          <td colSpan={8} className="p-0">
+            <div
+              data-state={open ? "open" : "closed"}
+              className={cn(
+                "grid grid-rows-[0fr] opacity-0",
+                "transition-[grid-template-rows,opacity] duration-[var(--duration-expand)] ease-[var(--ease-out)]",
+                "data-[state=open]:grid-rows-[1fr] data-[state=open]:opacity-100",
+                // Reduced motion: the detail is there or it is not, at
+                // full opacity, with no size change to track.
+                "motion-reduce:transition-none motion-reduce:data-[state=closed]:hidden motion-reduce:opacity-100",
+              )}
+            >
+              <div className="overflow-hidden">
+                <div className="px-4 py-4">
+                  <VarianceDetail variance={variance} />
+                </div>
+              </div>
+            </div>
           </td>
         </tr>
       ) : null}
@@ -478,11 +515,14 @@ function DecisionButton({
   children,
   onClick,
   disabled,
+  pending,
   subtle,
 }: {
   children: ReactNode;
   onClick: () => void;
   disabled?: boolean;
+  /** This button's own action is the one in flight. */
+  pending?: boolean;
   subtle?: boolean;
 }) {
   return (
@@ -490,9 +530,13 @@ function DecisionButton({
       type="button"
       onClick={onClick}
       disabled={disabled}
+      aria-busy={pending}
       className={cn(
-        "min-h-[28px] rounded-sm border px-2 py-1 text-[11.5px] whitespace-nowrap transition-colors",
+        "min-h-[28px] rounded-sm border px-2 py-1 text-[11.5px] whitespace-nowrap",
+        "transition-opacity duration-[var(--duration-feedback)] ease-[var(--ease-out)]",
         "disabled:cursor-not-allowed disabled:opacity-50",
+        // The button being written stays legible while its neighbour dims.
+        pending && "opacity-100 disabled:opacity-100",
         subtle
           ? "border-border text-muted-foreground hover:bg-muted hover:text-foreground"
           : "border-border-strong hover:bg-muted",
