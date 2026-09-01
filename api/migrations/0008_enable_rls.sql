@@ -53,4 +53,12 @@ alter table run_scores          enable row level security;
 -- /rest/v1/rpc by anon and authenticated. An event-trigger function errors
 -- if invoked outside an event trigger, so this is hardening rather than an
 -- open door — but neither role has any reason to hold EXECUTE on it.
+--
+-- Revoking from PUBLIC is the part that actually does the work. The
+-- function's ACL was `{=X/postgres,...}`, and a leading `=X` is a grant to
+-- PUBLIC, which anon and authenticated inherit — so revoking from those
+-- two roles by name was a no-op and left both still able to execute.
+-- Verified after applying: has_function_privilege is now false for anon
+-- and authenticated, and still true for service_role.
+revoke execute on function public.rls_auto_enable() from public;
 revoke execute on function public.rls_auto_enable() from anon, authenticated;
