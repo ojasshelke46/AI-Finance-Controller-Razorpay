@@ -18,5 +18,16 @@ api/**/__pycache__/
 api/*.egg-info/
 api/.pytest_cache/
 
+# Local agent/editor tooling. Not part of the project: these are
+# third-party skill definitions plus hook configs that hardcode absolute
+# paths from one machine (/Users/<name>/...), so they leak a username and
+# do nothing for anyone who clones this.
+.agents/
+.claude/
+.codex/
+.cursor/
+.impeccable/
+skills-lock.json
+
 # OS
 .DS_Store
