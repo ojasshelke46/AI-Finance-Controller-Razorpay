@@ -31,7 +31,7 @@ async def lifespan(_app: FastAPI):
         scheduler.shutdown()
 
 
-app = FastAPI(title="AI Revenue Recovery API", lifespan=lifespan)
+app = FastAPI(title="AI Finance Controller API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

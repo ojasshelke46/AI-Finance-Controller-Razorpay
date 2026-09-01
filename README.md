@@ -1,4 +1,4 @@
-# AI Revenue Recovery — payment reconciliation
+# AI Finance Controller — multi-source payment reconciliation
 
 Reconciles three records of the same money: Razorpay test-mode payments and
 settlements pulled from the API, a bank statement CSV, and an internal ledger
@@ -173,8 +173,8 @@ reach a scored run without them.
 
 1. **Clone and configure the API environment.**
    ```bash
-   git clone https://github.com/ojasshelke46/AI-Revenue-Recovery-Razorpay.git
-   cd AI-Revenue-Recovery-Razorpay
+   git clone https://github.com/ojasshelke46/AI-Finance-Controller-Razorpay.git
+   cd AI-Finance-Controller-Razorpay
    cp .env.example .env
    ```
    Fill in `.env`: `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` from the Supabase
