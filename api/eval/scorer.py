@@ -35,6 +35,7 @@ from collections import defaultdict
 from datetime import datetime
 
 from lib import db
+from lib.config import LLM_RATES_USD_PER_TOKEN
 
 logger = logging.getLogger("eval.scorer")
 
@@ -109,6 +110,77 @@ def _wall_clock_seconds(batch_id: str) -> float:
     if len(stamps) < 2:
         return 0.0
     return round((max(stamps) - min(stamps)).total_seconds(), 3)
+
+
+def _llm_usage(batch_id: str) -> dict:
+    """Count the LLM calls this batch actually made, and price them.
+
+    Everything here is read back out of audit_log, which lib/byteplus.py
+    already writes a provider, model id, latency and token count into for
+    every served call — so this reports what happened rather than a
+    number the scorer was told to believe. It was previously hardcoded to
+    0, which contradicted the audit trail sitting right next to it.
+
+    llm_calls counts COMPLETIONS SERVED — calls that came back with
+    content. A call that failed over NVIDIA -> BytePlus -> OpenRouter is
+    one served completion, not three; the failed hops carry no tokens and
+    cost nothing, and they are visible in the same row's `attempts` list.
+    Calls where every provider failed produced no completion and are
+    counted separately as llm_calls_failed rather than folded in.
+
+    Cost is summed per provider from the rates in lib/config.py. Tokens
+    from a provider with no configured rate are reported as
+    llm_unpriced_tokens rather than being silently priced at zero — an
+    incomplete estimate that says so is worth more than a confident one
+    that doesn't.
+    """
+    rows = _page("audit_log", "step,action,detail", batch_id)
+
+    served = 0
+    failed = 0
+    cost = 0.0
+    unpriced_tokens = 0
+    by_provider: dict[str, dict] = defaultdict(
+        lambda: {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0}
+    )
+
+    for row in rows:
+        action = row.get("action")
+        detail = row.get("detail")
+        if not isinstance(detail, dict):
+            continue
+
+        if action in ("batch_failed", "critic_batch_failed"):
+            failed += 1
+            continue
+        if action not in ("batch_explained", "critic_batch_graded"):
+            continue
+
+        served += 1
+        provider = detail.get("provider") or "unknown"
+        prompt_tokens = detail.get("prompt_tokens") or 0
+        completion_tokens = detail.get("completion_tokens") or 0
+
+        entry = by_provider[provider]
+        entry["calls"] += 1
+        entry["prompt_tokens"] += prompt_tokens
+        entry["completion_tokens"] += completion_tokens
+
+        rate = LLM_RATES_USD_PER_TOKEN.get(provider)
+        if rate is None:
+            unpriced_tokens += prompt_tokens + completion_tokens
+            continue
+        call_cost = prompt_tokens * rate["prompt"] + completion_tokens * rate["completion"]
+        entry["cost_usd"] = round(entry["cost_usd"] + call_cost, 8)
+        cost += call_cost
+
+    return {
+        "llm_calls": served,
+        "llm_calls_failed": failed,
+        "llm_cost_estimate": round(cost, 6),
+        "llm_unpriced_tokens": unpriced_tokens,
+        "by_provider": {k: dict(v) for k, v in sorted(by_provider.items())},
+    }
 
 
 def score_batch(batch_id: str) -> dict:
@@ -193,6 +265,15 @@ def score_batch(batch_id: str) -> dict:
     total_txns = len(txns)
     matched_txns = len(matched_ids)
 
+    usage = _llm_usage(batch_id)
+    wall_clock_seconds = _wall_clock_seconds(batch_id)
+    # Throughput. Guarded rather than assumed non-zero: a batch scored
+    # twice in the same second has a zero span, and dividing by it would
+    # crash the scorer over a cosmetic number.
+    records_per_second = (
+        round(total_txns / wall_clock_seconds, 4) if wall_clock_seconds else None
+    )
+
     result = {
         "batch_id": batch_id,
         "total_txns": total_txns,
@@ -206,9 +287,13 @@ def score_batch(batch_id: str) -> dict:
         "f1": round(f1, 6),
         "variance_explained_pct": variance_explained_pct,
         "unexplained_paise": unexplained_paise,
-        "wall_clock_seconds": _wall_clock_seconds(batch_id),
-        "llm_calls": 0,
-        "llm_cost_estimate": 0,
+        "wall_clock_seconds": wall_clock_seconds,
+        "records_per_second": records_per_second,
+        "llm_calls": usage["llm_calls"],
+        "llm_cost_estimate": usage["llm_cost_estimate"],
+        "_llm_calls_failed": usage["llm_calls_failed"],
+        "_llm_unpriced_tokens": usage["llm_unpriced_tokens"],
+        "_llm_by_provider": usage["by_provider"],
         "_total_true_pairs": total_true_pairs,
         "_per_tier": dict(per_tier),
         "_fp_details": fp_details,
@@ -250,8 +335,21 @@ def print_report(result: dict, worst_n: int = 10) -> None:
     print(f"  variance_explained_pct  {result['variance_explained_pct']:>12.4f}")
     print(f"  unexplained_paise       {result['unexplained_paise']:>12}")
     print(f"  wall_clock_seconds      {result['wall_clock_seconds']:>12}")
+    rps = result.get("records_per_second")
+    print(f"  records_per_second      {(f'{rps:.4f}' if rps is not None else 'n/a'):>12}")
     print(f"  llm_calls               {result['llm_calls']:>12}")
-    print(f"  llm_cost_estimate       {result['llm_cost_estimate']:>12}")
+    failed = result.get("_llm_calls_failed") or 0
+    if failed:
+        print(f"  llm_calls_failed        {failed:>12}  (every provider failed; no completion)")
+    print(f"  llm_cost_estimate USD   {result['llm_cost_estimate']:>12.6f}")
+    unpriced = result.get("_llm_unpriced_tokens") or 0
+    if unpriced:
+        print(f"  UNPRICED tokens         {unpriced:>12}  (provider missing from LLM_RATES_USD_PER_TOKEN — "
+              f"cost above is a lower bound)")
+    for provider, stats in (result.get("_llm_by_provider") or {}).items():
+        print(f"      {provider:<12} calls={stats['calls']:<5} "
+              f"prompt={stats['prompt_tokens']:<8} completion={stats['completion_tokens']:<8} "
+              f"${stats['cost_usd']:.6f}")
 
     # ---- per-tier breakdown ----
     print("\n" + "-" * 78)
