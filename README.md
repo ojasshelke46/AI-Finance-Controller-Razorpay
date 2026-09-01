@@ -15,6 +15,13 @@ Batch `9adfb642-e4e3-4227-aff0-c035be3ecb08`, scored `2026-09-01T16:45:24Z`.
 The figures below are the `run_scores` row for that batch and can be read back
 with `python -m scripts.run_pipeline 9adfb642-e4e3-4227-aff0-c035be3ecb08`.
 
+This batch is a **generated corpus**, not live merchant data. Precision and
+recall only exist because the generator recorded which rows belong to the same
+economic event; no real dataset carries that, and the matchers are firewalled
+from reading it (see below). Razorpay test-mode ingestion and the CSV/XLSX file
+parsers are real code paths that run, but the numbers here are from the corpus,
+because it is the only source that has an answer key to score against.
+
 | | |
 |---|---|
 | Records processed | 1,198 |
@@ -72,7 +79,7 @@ flowchart TB
     SCORE --> RS[(run_scores)]
 
     EXP -. one client, 3 providers .-> LLM[lib/byteplus.py<br/>NVIDIA → BytePlus → OpenRouter]
-    AUD -. .-> LLM
+    AUD -.-> LLM
 
     SCHED[scheduler — runtime/scheduler.py<br/>poll 15m · resume stuck 15m<br/>retry unexplained 6h · rollup daily] --> PIPE[runtime/pipeline.py<br/>9 resumable stages]
     PIPE --> ING
@@ -158,8 +165,11 @@ numbers, and what the leak was actually worth are in
 
 ## Setup
 
-Needs Python 3.13, Node 20+, a Supabase project, and a Razorpay test-mode
-account. Steps 1–6 reach a scored run; 7–8 add the console.
+Needs Python 3.13 and a Supabase project. Node is needed only for the console
+(steps 7–8; the build here was verified on Node 24.11.1 and `web/package.json`
+declares no minimum). Razorpay credentials are needed only to ingest live
+test-mode activity — the corpus path below does not call Razorpay, so steps 1–6
+reach a scored run without them.
 
 1. **Clone and configure the API environment.**
    ```bash
@@ -168,12 +178,14 @@ account. Steps 1–6 reach a scored run; 7–8 add the console.
    cp .env.example .env
    ```
    Fill in `.env`: `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` from the Supabase
-   project's API settings, `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` from the
-   Razorpay dashboard in test mode, and **at least one** LLM key —
-   `NVIDIA_API_KEY`, `BYTEPLUS_ARK_API_KEY`, or `OPENROUTER_API_KEY`. The
-   provider chain tries them in that order and falls through to the next on
-   failure, so one working key is enough to complete a run. The base URL and
-   model for each provider are already filled in.
+   project's API settings, and **at least one** LLM key — `NVIDIA_API_KEY`,
+   `BYTEPLUS_ARK_API_KEY`, or `OPENROUTER_API_KEY`. The provider chain tries
+   them in that order and falls through to the next when one is unset or
+   failing, so one working key is enough to complete a run. The base URL and
+   model for each provider are already filled in. `RAZORPAY_KEY_ID` and
+   `RAZORPAY_KEY_SECRET` (test mode) are only needed for live ingestion and can
+   be left blank for steps 2–6; without them `/health` will report Razorpay
+   down, which is accurate rather than broken.
 
 2. **Apply the migrations, in order.** There is no migration runner; paste each
    file into the Supabase SQL editor and run it:

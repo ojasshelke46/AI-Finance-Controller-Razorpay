@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { formatTime } from "@/lib/format";
@@ -14,6 +14,20 @@ import { formatTime } from "@/lib/format";
  * the time the figures were read and the countdown, so the operator can
  * tell the difference between "nothing is happening" and "this page is
  * stale".
+ *
+ * The countdown is derived from a DEADLINE rather than decremented, and
+ * router.refresh() is called from the interval callback rather than
+ * from inside a setState updater. Both matter:
+ *
+ *   - A state updater must be pure. React may re-run it during render,
+ *     and calling router.refresh() there updates the Router while this
+ *     component is rendering ("Cannot update a component while
+ *     rendering a different component").
+ *   - Browsers throttle timers in inactive tabs, so a decrementing
+ *     counter drifts: it would claim "refreshing in 12s" long after
+ *     that much time had actually passed. Reading the clock each tick
+ *     cannot drift, which is the honest thing for a display whose whole
+ *     job is telling an operator how stale the figures are.
  */
 export function AutoRefresh({
   seconds = 30,
@@ -25,6 +39,12 @@ export function AutoRefresh({
   const router = useRouter();
   const [remaining, setRemaining] = useState(seconds);
   const [paused, setPaused] = useState(false);
+  const deadlineRef = useRef<number>(Date.now() + seconds * 1000);
+
+  const restart = useCallback(() => {
+    deadlineRef.current = Date.now() + seconds * 1000;
+    setRemaining(seconds);
+  }, [seconds]);
 
   useEffect(() => {
     const onVisibility = () => setPaused(document.hidden);
@@ -35,15 +55,21 @@ export function AutoRefresh({
 
   useEffect(() => {
     if (paused) return;
+    // Resuming from a hidden tab starts a fresh window rather than
+    // firing immediately for however long the tab was away.
+    deadlineRef.current = Date.now() + seconds * 1000;
+    setRemaining(seconds);
+
     const tick = setInterval(() => {
-      setRemaining((value) => {
-        if (value <= 1) {
-          router.refresh();
-          return seconds;
-        }
-        return value - 1;
-      });
-    }, 1000);
+      const left = Math.ceil((deadlineRef.current - Date.now()) / 1000);
+      if (left > 0) {
+        setRemaining(left);
+        return;
+      }
+      deadlineRef.current = Date.now() + seconds * 1000;
+      setRemaining(seconds);
+      router.refresh();
+    }, 250);
     return () => clearInterval(tick);
   }, [paused, router, seconds]);
 
@@ -60,8 +86,8 @@ export function AutoRefresh({
       <button
         type="button"
         onClick={() => {
+          restart();
           router.refresh();
-          setRemaining(seconds);
         }}
         className="rounded-sm border border-border px-2 py-[3px] text-[11px] hover:bg-muted"
       >
