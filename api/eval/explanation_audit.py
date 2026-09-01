@@ -68,6 +68,8 @@ from explain.variance_explainer import (
     _fetch_by_ids,
     _fetch_group_members,
     _page,
+    _redact,
+    assert_no_leak,
     build_context,
 )
 
@@ -78,6 +80,27 @@ CRITIC_BATCH_SIZE = 5  # small: the critic should not carry six cases' reasoning
 SAMPLE_SEED = 20260823  # fixed so a rerun grades the same rows unless the pool changes
 
 _assert_no_forbidden(_TXN_DETAIL_COLUMNS)
+
+# The critic sees the same record data the explainer saw, so it inherits
+# the same ground-truth leak and the same redaction — _redact is applied
+# to every row this module fetches, and build_context applies it again on
+# the way through. Redacting twice is free; relying on the other module
+# to have done it is not, because the critic's verdict is what the
+# grounding percentage is built from.
+#
+# The critic is also shown the CLAIM, which is text an earlier explainer
+# wrote. An explanation produced before the leak was closed can quote the
+# label back ("the record is tagged synthetic:fee_tax_split"), so the
+# claim text is scrubbed too — otherwise re-auditing an old batch would
+# hand the critic the answer through the one field the record-side
+# redaction does not touch.
+_LEAK_TEXT_RE = re.compile(r"synthetic:\w*", re.IGNORECASE)
+
+
+def _scrub_leak_text(text):
+    if not isinstance(text, str):
+        return text
+    return _LEAK_TEXT_RE.sub("", text)
 
 CRITIC_SYSTEM_PROMPT = """You are an audit reviewer for a payment reconciliation
 system. Another model was shown a reconciliation variance (a discrepancy
@@ -283,7 +306,7 @@ def build_audit_contexts(batch_id: str, variances: list[dict]) -> list[tuple[dic
     txns = _fetch_by_ids("txns", ",".join(_TXN_DETAIL_COLUMNS), list(txn_ids))
     if txns:
         _assert_no_forbidden(txns[0].keys())
-    txns_by_id = {t["id"]: t for t in txns}
+    txns_by_id = {t["id"]: _redact(t) for t in txns}
 
     paired = []
     for v in variances:
@@ -292,7 +315,7 @@ def build_audit_contexts(batch_id: str, variances: list[dict]) -> list[tuple[dic
             "variance_id": v["id"],
             "category": v.get("category"),
             "subcategory": v.get("subcategory"),
-            "explanation": v.get("explanation"),
+            "explanation": _scrub_leak_text(v.get("explanation")),
             "suggested_action": v.get("suggested_action"),
         }
         paired.append((context, claim))
@@ -308,6 +331,7 @@ def _critic_prompt(pairs: list[tuple[dict, dict]]) -> str:
         }
         for ctx, claim in pairs
     ]
+    assert_no_leak(cases, where="critic prompt")
     return (
         f"Review the following {len(cases)} independent case(s). For each, check the "
         f"claim against the record data.\n\n"
@@ -470,6 +494,7 @@ def run_explanation_audit(batch_id: str, sample_size: int = DEFAULT_SAMPLE_SIZE)
             _write_audit(batch_id, "critic_batch_failed", {
                 "variance_ids": ids, "error": str(exc),
                 "latency_ms": usage.get("latency_ms"),
+                "attempts": getattr(exc, "attempts", None),
             })
             continue
 
@@ -496,6 +521,10 @@ def run_explanation_audit(batch_id: str, sample_size: int = DEFAULT_SAMPLE_SIZE)
             "prompt_tokens": usage.get("prompt_tokens"),
             "completion_tokens": usage.get("completion_tokens"),
             "total_tokens": usage.get("total_tokens"),
+            "provider": usage.get("provider"),
+            "provider_model": usage.get("provider_model"),
+            "fallback": usage.get("fallback"),
+            "attempts": usage.get("attempts"),
             "verdicts": {vid: {k: verdicts[vid][k] for k in
                                ("grounded", "amounts_correct", "action_appropriate", "issue")}
                          for vid in ids},

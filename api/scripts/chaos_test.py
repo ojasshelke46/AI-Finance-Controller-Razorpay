@@ -1,4 +1,4 @@
-"""Five failure scenarios run against a live system.
+"""Six failure scenarios run against a live system.
 
 The point is not that these five things never happen — they all happen
 in production. The point is what the system does when they do: keep the
@@ -99,13 +99,27 @@ def print_audit(batch_id: str, *, title: str, detail_chars: int = 400) -> None:
 
 
 # ---------------------------------------------------------------------
-# scenario 1 — BytePlus returns something that is not JSON
+# scenario 1 — every LLM provider is broken
 # ---------------------------------------------------------------------
 
-def scenario_1_bad_llm_response() -> dict:
-    header(1, "BytePlus returns malformed JSON")
+def _disable_nvidia_and_openrouter() -> tuple[str, str]:
+    """NVIDIA and OpenRouter can't be forced to error with a bad model
+    name the way BytePlus can (see scenario 1a) — a nonexistent model on
+    those providers may or may not 4xx the same way. Blanking their keys
+    forces a deterministic, fast 'no key configured' failure at each,
+    same fallback-eligible outcome, without depending on a specific
+    provider's error format. Returns the two original keys to restore."""
+    orig_nvidia = byteplus.NVIDIA_API_KEY
+    orig_openrouter = byteplus.OPENROUTER_API_KEY
+    byteplus.NVIDIA_API_KEY = ""
+    byteplus.OPENROUTER_API_KEY = ""
+    return orig_nvidia, orig_openrouter
 
-    batch_id = make_batch("byteplus malformed json")
+
+def scenario_1_bad_llm_response() -> dict:
+    header(1, "Every LLM provider is broken")
+
+    batch_id = make_batch("all providers broken")
     checks: dict[str, bool] = {}
 
     # Seed one variance so the explainer has real work to do.
@@ -124,11 +138,15 @@ def scenario_1_bad_llm_response() -> dict:
     ).data[0]
     log(f"seeded variance {variance['id']} (open) on batch {batch_id}")
 
-    # --- 1a: the real fault, forced exactly as specified: a bad model name
+    # --- 1a: the real fault, forced exactly as specified: a bad model
+    # name on the one provider left with a real key, and no key at all
+    # on the other two — so ALL THREE fail and the fallback chain is
+    # genuinely exhausted, not just skipping past a broken primary.
     original_model = byteplus.BYTEPLUS_ARK_MODEL
+    orig_nvidia, orig_openrouter = _disable_nvidia_and_openrouter()
     byteplus.BYTEPLUS_ARK_MODEL = "this-model-does-not-exist-chaos-test"
     try:
-        log("\n[1a] pointing BytePlus at a nonexistent model name...")
+        log("\n[1a] no NVIDIA/OpenRouter key, BytePlus pointed at a nonexistent model...")
         summary_bad_model = variance_explainer.run_variance_explainer(batch_id)
         log(f"     explainer returned: {json.dumps(summary_bad_model)}")
         checks["bad_model_did_not_crash"] = True
@@ -137,6 +155,8 @@ def scenario_1_bad_llm_response() -> dict:
         checks["bad_model_did_not_crash"] = False
     finally:
         byteplus.BYTEPLUS_ARK_MODEL = original_model
+        byteplus.NVIDIA_API_KEY = orig_nvidia
+        byteplus.OPENROUTER_API_KEY = orig_openrouter
 
     after_bad_model = db.run_with_retry(
         lambda: db.get_client().table("variances").select("status,category,explanation")
@@ -145,21 +165,44 @@ def scenario_1_bad_llm_response() -> dict:
     log(f"     variance after bad model: status={after_bad_model['status']}")
     checks["stayed_open_after_bad_model"] = after_bad_model["status"] == "open"
 
+    # A nonexistent model name is a genuine 4xx (BytePlus's own API says
+    # "the model or endpoint does not exist") — a bug in what THIS
+    # module sent, not something OpenRouter could fix. Per byteplus.py's
+    # own rule that must surface immediately with NO further fallback:
+    # NVIDIA is tried and fails (no key), then BytePlus's 404 propagates
+    # as-is and OpenRouter is never even attempted. So the audit_log
+    # entry here is a single surfaced error, not an "attempts" list —
+    # that's only populated when the whole chain is exhausted via
+    # fallback-eligible failures (see scenario 6). Confirm both halves:
+    # the bug is visible, and it wasn't silently retried elsewhere.
+    audit_after_1a = audit_rows(batch_id)
+    bad_model_failure = [r for r in audit_after_1a if r["action"] == "batch_failed"]
+    error_text = (bad_model_failure[-1]["detail"] or {}).get("error", "") if bad_model_failure else ""
+    log(f"     surfaced error: {error_text[:160]}")
+    checks["bad_model_4xx_surfaced_from_byteplus_directly"] = (
+        bool(bad_model_failure) and "byteplus" in error_text and "404" in error_text
+    )
+    checks["genuine_4xx_did_not_trigger_full_fallback_chain"] = (
+        bool(bad_model_failure) and (bad_model_failure[-1]["detail"] or {}).get("attempts") is None
+    )
+
     # --- 1b: a bad model name is an HTTP error, not a parse error. To
     # actually exercise ByteplusParseError the model has to RETURN
-    # something that is not JSON, so force exactly that.
-    log("\n[1b] forcing BytePlus to return prose instead of JSON...")
-    original_request = byteplus._request
+    # something that is not JSON, so force exactly that — regardless of
+    # which provider in the chain ends up serving the (fake) response.
+    log("\n[1b] forcing whichever provider serves the call to return prose instead of JSON...")
+    original_request_one = byteplus._request_one
 
-    def prose_response(messages, *, timeout=60.0):
-        return {
+    def prose_response(provider, messages, *, timeout=60.0):
+        data = {
             "choices": [{"message": {"content":
                 "Sure! Here's my analysis of the variance: it looks like a fee. "
                 "I'm not going to give you JSON today."}}],
             "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
         }
+        return data, 12.3
 
-    byteplus._request = prose_response
+    byteplus._request_one = prose_response
     parse_error_raised = False
     try:
         byteplus.complete_json("system", "user", "{}")
@@ -180,7 +223,7 @@ def scenario_1_bad_llm_response() -> dict:
         log(f"     UNCAUGHT {type(exc).__name__}: {exc}")
         checks["explainer_caught_parse_error"] = False
     finally:
-        byteplus._request = original_request
+        byteplus._request_one = original_request_one
 
     after_prose = db.run_with_retry(
         lambda: db.get_client().table("variances").select("status,category,explanation")
@@ -189,8 +232,9 @@ def scenario_1_bad_llm_response() -> dict:
     log(f"     variance after prose response: status={after_prose['status']}")
     checks["stayed_open_after_parse_error"] = after_prose["status"] == "open"
 
-    # --- 1c: does the batch still reach scoring with the LLM broken?
-    log("\n[1c] running the full pipeline with BytePlus still pointed at a bad model...")
+    # --- 1c: does the batch still reach scoring with every LLM broken?
+    log("\n[1c] running the full pipeline with all three providers still broken...")
+    orig_nvidia, orig_openrouter = _disable_nvidia_and_openrouter()
     byteplus.BYTEPLUS_ARK_MODEL = "this-model-does-not-exist-chaos-test"
     try:
         result = pipeline.run_batch(batch_id)
@@ -203,6 +247,8 @@ def scenario_1_bad_llm_response() -> dict:
         checks["pipeline_completed"] = False
     finally:
         byteplus.BYTEPLUS_ARK_MODEL = original_model
+        byteplus.NVIDIA_API_KEY = orig_nvidia
+        byteplus.OPENROUTER_API_KEY = orig_openrouter
 
     batch = pipeline.get_batch(batch_id)
     log(f"     batch status: {batch['status']}, error_text: {batch['error_text']}")
@@ -548,6 +594,113 @@ def scenario_5_duplicate_ingest() -> dict:
 
 
 # ---------------------------------------------------------------------
+# scenario 6 — both primary LLM providers degraded, OpenRouter answers
+# ---------------------------------------------------------------------
+
+def scenario_6_all_primaries_degraded() -> dict:
+    header(6, "NVIDIA + BytePlus degraded — OpenRouter serves as third fallback")
+
+    batch_id = make_batch("primary providers degraded")
+    checks: dict[str, bool] = {}
+
+    txn = db.run_with_retry(
+        lambda: db.get_client().table("txns").insert({
+            "batch_id": batch_id, "source_kind": "bank", "external_ref": "chaos_ref_6",
+            "amount_paise": 654321, "txn_date": date.today().isoformat(),
+            "description": "chaos scenario 6 — settlement fee residual", "raw": {"chaos": True},
+        }).execute()
+    ).data[0]
+    variance = db.run_with_retry(
+        lambda: db.get_client().table("variances").insert({
+            "batch_id": batch_id, "txn_id": txn["id"], "variance_paise": 654321,
+            "category": "orphan_source_missing", "status": "open",
+        }).execute()
+    ).data[0]
+    log(f"seeded variance {variance['id']} (open) on batch {batch_id}")
+
+    # NVIDIA: simulate an auth failure (expired/bad key) — fallback-eligible
+    # per byteplus.py's own rule (401/403 is not a malformed-request bug).
+    # BytePlus: simulate an HTTP 429 that outlasted its own retry — also
+    # fallback-eligible. OpenRouter is left untouched: real key, real call,
+    # so this proves the third hop actually answers, not just that the
+    # first two fail gracefully.
+    original_request_one = byteplus._request_one
+
+    def degraded_primaries(provider, messages, *, timeout=60.0):
+        if provider.name == "nvidia":
+            raise byteplus._ProviderFailed(
+                'nvidia: auth failed (HTTP 403): {"status":403,"title":"Forbidden"} (chaos-injected)'
+            )
+        if provider.name == "byteplus":
+            raise byteplus._ProviderFailed(
+                'byteplus: HTTP 429 after retries. Raw response: {"error":"rate limited"} (chaos-injected)'
+            )
+        return original_request_one(provider, messages, timeout=timeout)
+
+    byteplus._request_one = degraded_primaries
+    try:
+        log("\n[6a] NVIDIA auth-failing and BytePlus 429-ing, OpenRouter live...")
+        summary = variance_explainer.run_variance_explainer(batch_id)
+        log(f"     explainer returned: {json.dumps(summary)}")
+        checks["explainer_did_not_crash"] = True
+        checks["variance_actually_explained"] = (
+            summary.get("explained", 0) + summary.get("still_open_unexplained", 0) >= 1
+        )
+    except Exception as exc:  # noqa: BLE001
+        log(f"     UNCAUGHT {type(exc).__name__}: {exc}")
+        checks["explainer_did_not_crash"] = False
+        checks["variance_actually_explained"] = False
+    finally:
+        byteplus._request_one = original_request_one
+
+    after = db.run_with_retry(
+        lambda: db.get_client().table("variances").select("status,category,explanation")
+        .eq("id", variance["id"]).execute()
+    ).data[0]
+    log(f"     variance after degraded-primaries call: status={after['status']}, category={after['category']}")
+    # "answered" means the call round-tripped through OpenRouter and the
+    # explainer wrote SOME verdict — confident (explained) or an honest
+    # unexplained (still open) both count; a crash or a stuck 'open' from
+    # the batch never running at all would not.
+    checks["batch_did_not_stall"] = after["status"] in ("open", "explained")
+
+    audit = audit_rows(batch_id)
+    explained_rows = [r for r in audit if r["action"] in ("batch_explained", "batch_failed")]
+    checks["audit_row_present"] = bool(explained_rows)
+
+    detail = (explained_rows[-1]["detail"] if explained_rows else {}) or {}
+    attempts = detail.get("attempts") or []
+    log(f"     audit_log attempts: {json.dumps(attempts)}")
+    log(f"     audit_log winning provider: {detail.get('provider')}, fallback={detail.get('fallback')}")
+
+    checks["all_three_attempts_recorded"] = len(attempts) == 3
+    checks["attempts_in_order_nvidia_byteplus_openrouter"] = (
+        [a.get("provider") for a in attempts] == ["nvidia", "byteplus", "openrouter"]
+    )
+    checks["nvidia_and_byteplus_recorded_as_failed"] = (
+        len(attempts) == 3
+        and attempts[0].get("outcome") == "failed"
+        and attempts[1].get("outcome") == "failed"
+    )
+    checks["openrouter_recorded_as_success"] = (
+        len(attempts) == 3 and attempts[2].get("outcome") == "success"
+    )
+    checks["winning_provider_is_openrouter"] = detail.get("provider") == "openrouter"
+    checks["winner_marked_as_fallback"] = detail.get("fallback") is True
+
+    checks["service_alive"] = service_alive()
+    batch = pipeline.get_batch(batch_id)
+    checks["batch_defensible"] = batch["status"] in (
+        "pending", "ingesting", "matching", "explaining", "complete", "scored", "failed"
+    )
+
+    print_audit(batch_id, title="SCENARIO 6 — capture this for the demo video")
+
+    return {"scenario": 6, "batch_id": batch_id, "checks": checks,
+            "passed": all(checks.values())}
+
+
+# ---------------------------------------------------------------------
 
 SCENARIOS = {
     1: scenario_1_bad_llm_response,
@@ -555,6 +708,7 @@ SCENARIOS = {
     3: scenario_3_rate_limit,
     4: scenario_4_corrupt_csv,
     5: scenario_5_duplicate_ingest,
+    6: scenario_6_all_primaries_degraded,
 }
 
 

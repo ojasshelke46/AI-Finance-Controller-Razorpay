@@ -10,6 +10,7 @@ cffi==2.1.1
 click==8.4.2
 cryptography==50.0.0
 deprecation==2.1.0
+et_xmlfile==2.0.0
 fastapi==0.141.1
 h11==0.16.0
 h2==4.4.1
@@ -20,6 +21,7 @@ httpx==0.28.1
 hyperframe==6.1.0
 idna==3.19
 multidict==6.7.1
+openpyxl==3.1.5
 packaging==26.3
 postgrest==2.31.0
 propcache==0.5.2

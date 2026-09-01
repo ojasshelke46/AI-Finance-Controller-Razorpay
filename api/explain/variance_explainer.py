@@ -69,6 +69,60 @@ def _assert_no_forbidden(columns) -> None:
 
 _assert_no_forbidden(_TXN_DETAIL_COLUMNS)
 
+
+# ---------------------------------------------------------------------
+# ground-truth redaction
+# ---------------------------------------------------------------------
+# _assert_no_forbidden above covers the SCHEMA columns. It does not
+# cover the second, quieter leak: scripts/generate_corpus.py stamps its
+# own answer key into two ordinary record fields on every synthetic row —
+# description "synthetic:<category>" and raw["category"] — so a context
+# assembled from those fields hands the model strings like
+# "synthetic:fee_tax_split" and then asks it to classify that variance.
+# It can read the answer off the record.
+#
+# The fix belongs HERE and not in the generator. Those fields are real
+# record data as far as the database is concerned, and eval/scorer.py
+# legitimately recovers the injected category from description to grade
+# against. Redacting at context-build time keeps the label in the
+# database for the grader and keeps it away from every model.
+_LEAK_KEYS = frozenset({"synthetic", "category", "truth_group"})
+
+# Substrings that must never survive into a serialized model context.
+_LEAK_MARKERS = ("synthetic:", "truth_group")
+
+
+def _redact(t: dict) -> dict:
+    """Strip the corpus's answer key out of one txn row."""
+    d = dict(t)
+    if (d.get("description") or "").startswith("synthetic:"):
+        d["description"] = ""
+    raw = d.get("raw") or {}
+    d["raw"] = {k: v for k, v in raw.items() if k not in _LEAK_KEYS}
+    return d
+
+
+def assert_no_leak(payload, *, where: str = "context") -> None:
+    """Raise if something about to reach a model still carries the label.
+
+    Deliberately loud, and deliberately checked on the SERIALIZED form
+    rather than on the fields we remembered to look at — a leak that
+    reopens through some field nobody thought about is exactly the case
+    a field-by-field check misses. A leak that reopens quietly is worse
+    than one never closed: by then every explainer and grounding number
+    since the regression was measured against a model that could read
+    the answer, and nothing in the output says so.
+    """
+    serialized = json.dumps(payload, default=str)
+    for marker in _LEAK_MARKERS:
+        if marker in serialized:
+            raise AssertionError(
+                f"ground-truth leak in {where}: serialized context contains {marker!r}. "
+                "The corpus label must be redacted before any record reaches a model "
+                "(see _redact). Refusing to send it."
+            )
+
+
 SYSTEM_PROMPT = """You are a reconciliation controller for a payment gateway
 reconciliation system (Razorpay gateway, bank statements, and an internal
 ledger). You are given one or more independent "variance" cases: a
@@ -232,6 +286,9 @@ def _fetch_group_members(group_ids: list[str]) -> dict[str, list[str]]:
 
 
 def _txn_detail(t: dict) -> dict:
+    # Every record reaching a model goes through here, so this is the one
+    # place the redaction has to hold.
+    t = _redact(t)
     return {
         "txn_id": t["id"],
         "source_kind": t["source_kind"],
@@ -273,13 +330,15 @@ def build_context(
             if tid in txns_by_id:
                 records.append(_txn_detail(txns_by_id[tid]))
 
-    return {
+    context = {
         "variance_id": variance["id"],
         "variance_paise": variance["variance_paise"],
         "provisional_category": variance.get("category"),
         "match_group": match_group_info,
         "records": records,
     }
+    assert_no_leak(context, where=f"variance {variance['id']} context")
+    return context
 
 
 def _user_prompt(contexts: list[dict]) -> str:
@@ -414,6 +473,7 @@ def run_variance_explainer(batch_id: str) -> dict:
             _write_audit(batch_id, "batch_failed", {
                 "variance_ids": variance_ids, "error": str(exc),
                 "latency_ms": usage.get("latency_ms"),
+                "attempts": getattr(exc, "attempts", None),
             })
             continue
 
@@ -445,6 +505,10 @@ def run_variance_explainer(batch_id: str) -> dict:
             "prompt_tokens": usage.get("prompt_tokens"),
             "completion_tokens": usage.get("completion_tokens"),
             "total_tokens": usage.get("total_tokens"),
+            "provider": usage.get("provider"),
+            "provider_model": usage.get("provider_model"),
+            "fallback": usage.get("fallback"),
+            "attempts": usage.get("attempts"),
         })
 
     return {
