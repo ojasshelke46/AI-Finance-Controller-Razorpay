@@ -91,6 +91,11 @@ export type RunScore = {
 
 export type StatusResponse = {
   scheduler_running: boolean;
+  /** The scheduler's own most recent audit_log write, for any reason —
+   *  moves every ~15 minutes whether or not there was new work. Distinct
+   *  from last_run, which only moves when a full pipeline actually ran
+   *  and can be honestly hours old on an idle system. */
+  scheduler_last_active_at: string | null;
   jobs: SchedulerJob[];
   next_run_at: string | null;
   last_run: {

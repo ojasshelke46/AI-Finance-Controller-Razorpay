@@ -183,8 +183,27 @@ def status():
         .order("created_at", desc=True).limit(12).execute()
     ).data
 
+    # The scheduler ticks every 15 minutes whether or not there is new
+    # work — "Polled Razorpay, nothing new" and "Checked for stalled
+    # batches, none" are both successful ticks, not failures. last_run
+    # above is the last time a full pipeline actually ran, which can
+    # legitimately be many hours old on an idle system with no new
+    # Razorpay activity and nothing stuck to resume. Without a separate
+    # signal for "is the scheduler itself still alive right now", that
+    # large, honest gap reads as the automation having stopped. This is
+    # the most recent audit_log row the scheduler wrote for ANY reason,
+    # so it moves every 15 minutes regardless of whether real work
+    # happened.
+    last_tick = db.run_with_retry(
+        lambda: db.get_client().table("audit_log")
+        .select("created_at").eq("actor", "scheduler")
+        .order("created_at", desc=True).limit(1).execute()
+    ).data
+    scheduler_last_active_at = last_tick[0]["created_at"] if last_tick else None
+
     return {
         "scheduler_running": running,
+        "scheduler_last_active_at": scheduler_last_active_at,
         "jobs": jobs,
         "next_run_at": next_run_at,
         "last_run": {

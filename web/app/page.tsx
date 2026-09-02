@@ -22,8 +22,15 @@ export const dynamic = "force-dynamic";
 /**
  * The autonomy proof. This page answers one question — is the system
  * doing the work without anyone touching it — and everything at the top
- * is evidence for that answer: the last run that finished, the next one
- * already scheduled, and how many of the recent events a person caused.
+ * is evidence for that answer: when the scheduler itself last ticked,
+ * the last batch that actually completed, the next one already
+ * scheduled, and how many of the recent events a person caused.
+ *
+ * "Scheduler last active" and "Last batch completed" answer different
+ * questions and can legitimately disagree by hours: the scheduler ticks
+ * every ~15 minutes and most ticks find nothing new to do, which is a
+ * successful tick, not evidence of stalling. A single "last run" figure
+ * conflated the two and read as broken on any quiet day.
  *
  * Money lives below that line. It matters, but it is not what this page
  * is for, and when it took the largest figure on the screen it argued
@@ -45,6 +52,7 @@ export default async function StatusPage() {
 
   const {
     scheduler_running,
+    scheduler_last_active_at,
     jobs,
     next_run_at,
     last_run,
@@ -86,9 +94,37 @@ export default async function StatusPage() {
           <AutoRefresh seconds={30} asOf={server_time} />
         </div>
 
-        <dl className="mt-4 grid grid-cols-2 gap-x-8 gap-y-4 sm:grid-cols-4">
+        <dl className="mt-4 grid grid-cols-2 gap-x-8 gap-y-4 sm:grid-cols-5">
+          {/* Answers "is this actually alive right now", independent of
+           *  whether there was anything to do. The scheduler ticks every
+           *  ~15 minutes and most ticks find nothing new — "Polled
+           *  Razorpay, nothing new" is a successful tick, not an idle
+           *  system. Without this, "Last batch completed" (which only
+           *  moves when real work happens, and is honestly hours old on
+           *  a quiet day) was the only recency figure on the page, and
+           *  read as the automation having stopped. */}
           <Metric
-            label="Last run finished"
+            label="Scheduler last active"
+            size="lg"
+            value={
+              <LiveFigure value={scheduler_last_active_at ?? "none"}>
+                {scheduler_last_active_at ? relativeTime(scheduler_last_active_at) : "—"}
+              </LiveFigure>
+            }
+            severity={!scheduler_running ? "critical" : undefined}
+            hint={
+              scheduler_last_active_at ? (
+                <>
+                  ticks every 15m ·{" "}
+                  <span className="num">{formatTime(scheduler_last_active_at)}</span>
+                </>
+              ) : (
+                "no tick recorded yet"
+              )
+            }
+          />
+          <Metric
+            label="Last batch completed"
             size="lg"
             value={
               <LiveFigure value={last_run?.at ?? "none"}>
