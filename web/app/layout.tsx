@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import Link from "next/link";
 
+import { NavLink } from "@/components/nav-link";
 import { SectionTransition } from "@/components/section-transition";
 
 import "./globals.css";
@@ -31,15 +31,18 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
 
         <header className="sticky top-0 z-30 border-b border-border bg-surface/95 backdrop-blur">
           <div className="mx-auto flex h-11 max-w-[1400px] items-center gap-5 px-4 md:px-6">
-            <Link
-              href="/"
-              className="flex items-baseline gap-2 text-[13px] font-semibold tracking-tight"
-            >
+            {/* The wordmark is identity, not navigation. It used to link
+             *  to "/", which is also where "Status" goes — three
+             *  clickable things, two destinations, and no indication of
+             *  the current section, so every one of them looked like it
+             *  did nothing. Navigation lives in the nav; Status is the
+             *  home route and says so by being marked current. */}
+            <span className="flex items-baseline gap-2 text-[13px] font-semibold tracking-tight">
               Reconciliation
               <span className="text-[10.5px] font-medium tracking-[0.08em] text-muted-foreground uppercase">
                 Console
               </span>
-            </Link>
+            </span>
             <nav aria-label="Primary" className="flex items-center gap-1">
               <NavLink href="/">Status</NavLink>
               <NavLink href="/batches">Batches</NavLink>
@@ -59,16 +62,5 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         </footer>
       </body>
     </html>
-  );
-}
-
-function NavLink({ href, children }: { href: string; children: React.ReactNode }) {
-  return (
-    <Link
-      href={href}
-      className="rounded-sm px-2 py-1.5 text-[12.5px] text-muted-foreground hover:bg-muted hover:text-foreground"
-    >
-      {children}
-    </Link>
   );
 }
