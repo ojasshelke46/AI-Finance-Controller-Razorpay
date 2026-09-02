@@ -28,6 +28,12 @@ logger = logging.getLogger("routes.console")
 router = APIRouter(prefix="/console", tags=["console"])
 
 _PAGE = 1000
+
+# scripts/chaos_test.py names every batch it creates "chaos: <scenario>".
+# That prefix is the only marker distinguishing a deliberately broken
+# batch from a real run, so it is named here rather than being spelled
+# out inline at each use.
+CHAOS_LABEL_PREFIX = "chaos:"
 MAX_BATCHES = 100
 
 
@@ -134,13 +140,32 @@ def status():
         .gte("completed_at", today.isoformat()).execute()
     ).count or 0
 
+    # Chaos-test batches are excluded from the headline score, and the
+    # label is carried through so the card can name the batch it is
+    # quoting instead of showing a bare uuid.
+    #
+    # scripts/chaos_test.py deliberately corrupts its batches — a CSV with
+    # junk rows mid-file, an LLM pointed at a dead model, an injected
+    # database outage. They score near zero BECAUSE the test worked. This
+    # page exists to answer "is the system working", and a batch built to
+    # be broken is not evidence either way; left in, the most recent one
+    # headlined the whole system at 3.66% match / 0.00% precision with
+    # nothing on the card to say it was a fault injection.
+    #
+    # Filtered in the query via an inner join on batches rather than in
+    # Python, so "most recent non-chaos score" stays one round trip.
     latest_score = db.run_with_retry(
         lambda: db.get_client().table("run_scores")
         .select("batch_id,run_at,match_rate,precision,recall,f1,total_txns,"
-                "explanation_grounding_pct")
+                "explanation_grounding_pct,batches!inner(label)")
+        .not_.like("batches.label", f"{CHAOS_LABEL_PREFIX}%")
         .order("run_at", desc=True).limit(1).execute()
     ).data
     score = latest_score[0] if latest_score else None
+    if score:
+        # Flatten the embedded row: the client wants a label, not a nested
+        # resource it has to know the shape of.
+        score["label"] = (score.pop("batches", None) or {}).get("label")
 
     # Total open variance value across every batch — the number an
     # operations lead actually cares about at a glance.

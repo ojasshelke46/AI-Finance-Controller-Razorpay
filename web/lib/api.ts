@@ -82,7 +82,11 @@ export type RunScore = {
   variance_explained_pct?: number | null;
   unexplained_paise?: number | null;
   wall_clock_seconds?: number | null;
+  records_per_second?: number | null;
   explanation_grounding_pct: number | null;
+  /** Only populated by /console/status, which joins the batch label in so
+   *  the card can name the run it is quoting. */
+  label?: string | null;
 };
 
 export type StatusResponse = {

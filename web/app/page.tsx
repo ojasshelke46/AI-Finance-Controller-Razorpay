@@ -203,16 +203,25 @@ export default async function StatusPage() {
             ) : null}
           </h2>
           {latest_score ? (
-            <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
-              <Metric label="Match rate" value={formatRatio(latest_score.match_rate)} />
-              <Metric label="Precision" value={formatRatio(latest_score.precision)} />
-              <Metric label="Recall" value={formatRatio(latest_score.recall)} />
-              <Metric
-                label="Grounding"
-                value={formatPercent(latest_score.explanation_grounding_pct)}
-                hint="figures traced"
-              />
-            </dl>
+            <>
+              {/* Name the batch these figures came from. A bare uuid gives
+               *  a reader no way to tell which run is being quoted. */}
+              {latest_score.label ? (
+                <p className="mb-2.5 text-[12px] text-muted-foreground">
+                  {latest_score.label}
+                </p>
+              ) : null}
+              <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
+                <Metric label="Match rate" value={formatRatio(latest_score.match_rate)} />
+                <Metric label="Precision" value={formatRatio(latest_score.precision)} />
+                <Metric label="Recall" value={formatRatio(latest_score.recall)} />
+                <Metric
+                  label="Grounding"
+                  value={formatPercent(latest_score.explanation_grounding_pct)}
+                  hint="figures traced"
+                />
+              </dl>
+            </>
           ) : (
             <p className="text-[12px] text-muted-foreground">
               No run has been scored yet. Scores appear once a batch finishes with ground
