@@ -36,7 +36,7 @@ export default async function QnaPage({ params }: PageProps<"/batches/[id]/qna">
       <Panel className="h-fit">
         <PanelHeader
           title="Figures available"
-          description="An answer can only be built from these. Anything else, and it is withheld."
+          description="An answer can only be built from these. Anything else, and it is withheld. What the answer then claims about how these figures relate to one another is not checked — compare it against the list yourself."
         />
         {unavailable ? (
           <p className="px-4 py-4 text-[12px] text-muted-foreground">

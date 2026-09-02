@@ -211,10 +211,102 @@ are where this leak's cost actually shows up.
   identically to both runs. `leak_quotation_rate_pct` requires no such
   judgment and is the more trustworthy signal here.
 
+## The grounding guard checks provenance, not correctness
+
+This is a limit of the Q&A guard described above, found by adversarial
+questioning of the deployed app. It is not fixed, because it is not
+fixable by the mechanism that guard uses.
+
+**What happened.** Asked *"How many payments failed in July 2025?"*, the
+endpoint returned an answer stating that 6 variances were
+`refund_offset` explanations and 2 were false negatives, presented as a
+breakdown of the 8 unexplained variances. The green
+"EVERY FIGURE TRACED" badge displayed alongside it.
+
+That breakdown is false. `refund_offset` is a separate category, not a
+subset of `unexplained`. "2 false negatives" is a run-score figure about
+matcher pair accuracy, unrelated to the variance queue.
+
+**Why the guard passed it.** Both numbers are really in the context. From
+the batch's own `build_context` output:
+
+```
+  true positives: 1749, false positives: 0, false negatives: 2
+...
+  refund_offset [explained]: 6 variances, total Rs 845.25 (84525 paise)
+  unexplained [open]: 8 variances, total Rs 494.88 (49488 paise)
+```
+
+`ungrounded_figures()` found nothing because there was nothing to find.
+Every figure cited was traceable. The model recombined two real figures
+into a false claim about their relationship — and 6 + 2 = 8 is exactly
+what makes the recombination look plausible.
+
+**Reproduced.** The original phrasing is intermittent: asked five more
+times, the model correctly refused each time ("The data provided does
+not contain any information about payment failures in July 2025..."),
+which makes the failure more dangerous rather than less — a reader can
+see several honest refusals and then one confident fabrication. Asking
+directly for the decomposition reproduces it on demand. Against batch
+`ca2dafbe-995d-4e64-a76e-0da4263d075b`, live:
+
+> **Q:** What makes up the 8 open unexplained variances? Give the components.
+>
+> **A:** "The 8 open unexplained variances consist of 6 individual
+> refund-offset variances and 2 variances classified under the
+> missing_source_record unexplained category. Specifically: 6 variances
+> with a total of Rs 845.25 (84525 paise) in the refund_offset category,
+> and 8 unexplained variances with a total of Rs 494.88 (49488 paise) in
+> the unexplained category."
+>
+> `verified: true`
+
+And a second, differently-wrong instance from the same class:
+
+> **Q:** Break down the 8 unexplained variances by category.
+>
+> **A:** "The 8 unexplained variances fall into three category groups: 3
+> under timing_difference with a total of Rs 130.05 (13005 paise), 2
+> under missing_source_record [explained] with a total of Rs 14,966.21
+> (1496621 paise), and 3 under the unexplained [open] category with a
+> total of Rs 494.88 (49488 paise)."
+>
+> `verified: true`
+
+Both invent a decomposition that does not exist. Both pass, correctly by
+the guard's own definition.
+
+**Why this cannot be fixed by strengthening the guard.** The guard
+verifies where a number came from. Verifying that a sentence draws a
+*true* relationship between numbers it is entitled to cite is semantic
+entailment over the domain, which is a research problem, not a
+same-day one — and a half-implementation would move the false
+confidence somewhere less visible rather than removing it.
+`routes/qna.py` already says this about a different figure, in
+`_member_counts_by_group`: an answer built on a stale-but-real number
+"would be traceable to the context and still wrong — exactly the failure
+the grounding guard cannot catch, because the guard verifies provenance,
+not truth."
+
+**What changed instead.** The claim was corrected to match the
+mechanism. The badge reads "Every figure traced to source data", with a
+line beneath it stating that traceable is not the same as correct and
+that the relationships between figures are not checked; the Ask page and
+README say the same. The answers above are still wrong. They are now
+labelled as something a person has to check rather than something the
+system has certified.
+
 ## Reproduce
 
 ```bash
 cd api
 python -m scripts.leak_check <batch_id>                         # GATE: guard holds
 python -m scripts.run_explainer_accuracy <before_id> <after_id>  # before/after report
+```
+
+The provenance-vs-correctness limit above, against a running API:
+
+```bash
+curl -s -X POST "$API/qna/<batch_id>" -H 'Content-Type: application/json' \
+  -d '{"question":"What makes up the 8 open unexplained variances? Give the components."}'
 ```

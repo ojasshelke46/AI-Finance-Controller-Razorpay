@@ -60,7 +60,7 @@ export function QnaConsole({ batchId, facts }: { batchId: string; facts: Fact[] 
     <Panel>
       <PanelHeader
         title="Ask about this run"
-        description="Answers are built only from the figures listed alongside. Every number in a reply is checked against those figures before it is shown, and an answer that cites anything else is withheld."
+        description="Answers are built only from the figures listed alongside. Every number in a reply is checked against those figures before it is shown, and an answer that cites anything else is withheld. That check is about where the numbers came from, not about whether the answer is right — a reply can quote only real figures and still draw a false relationship between them."
       />
 
       <form
@@ -142,11 +142,23 @@ export function QnaConsole({ batchId, facts }: { batchId: string; facts: Fact[] 
           <div className="space-y-3" aria-live="polite">
             <p className="text-[12px] text-muted-foreground">{answer.question}</p>
 
-            {/* The verdict comes before the words it applies to. */}
+            {/* The verdict comes before the words it applies to — and it
+             *  is a verdict about PROVENANCE, not about truth. The guard
+             *  checks that every number in the answer appears in this
+             *  batch's data. It cannot check that the answer combines
+             *  those numbers into a true statement, and it has been
+             *  observed not to: an answer once described 6 refund_offset
+             *  variances and 2 false negatives as a breakdown of the 8
+             *  open unexplained ones. Both figures were real and
+             *  traceable; the relationship drawn between them was
+             *  invented. Saying "every figure traced" and nothing else
+             *  would let a reader hear "this answer is correct". */}
             <div className="flex flex-wrap items-center gap-2">
               <Pill severity={answer.verified ? "ok" : "critical"}>
                 <StatusDot severity={answer.verified ? "ok" : "critical"} />
-                {answer.verified ? "Every figure traced" : "Withheld — untraceable figure"}
+                {answer.verified
+                  ? "Every figure traced to source data"
+                  : "Withheld — untraceable figure"}
               </Pill>
               {retried ? (
                 <span className="text-[11px] text-muted-foreground">
@@ -154,6 +166,14 @@ export function QnaConsole({ batchId, facts }: { batchId: string; facts: Fact[] 
                 </span>
               ) : null}
             </div>
+
+            {answer.verified ? (
+              <p className="text-[11.5px] text-muted-foreground">
+                Traceable is not the same as correct. Every number above was read from this
+                batch, but how the answer relates those numbers to each other is not
+                checked. Read the figures, not just the sentence.
+              </p>
+            ) : null}
 
             <div
               className={cn(

@@ -311,6 +311,15 @@ because nothing in the pipeline path uses it.
   number in a generated answer is checked against the numbers in the supplied
   context; one regeneration is attempted, then the answer is withheld. That is
   the intended behaviour, but it means some legitimate questions get a refusal.
+- **The Q&A guard verifies provenance, not correctness, and cannot do
+  otherwise.** It checks that every number in an answer appears in the batch's
+  own figures. It does not and cannot check that the answer combines those
+  numbers into a true statement, so an answer built entirely from real figures
+  can still assert a false relationship between them and pass the check —
+  reproduced, with the exact question and reply, in
+  [EVALUATION.md](EVALUATION.md#the-grounding-guard-checks-provenance-not-correctness).
+  The UI says "Every figure traced to source data" rather than anything implying
+  the answer is right, for this reason.
 - **Older batches in the database are in mixed states.** Some early ones predate
   `run_scores` and carry no score. Several are `chaos_test.py` artifacts — real
   batches the scenarios create to inject a fault into, e.g. a corrupt CSV row or
