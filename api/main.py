@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 
@@ -33,12 +34,24 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="AI Finance Controller API", lifespan=lifespan)
 
+# The deployed console (Vercel) is a different origin from the API
+# (Railway), so it needs to be in allow_origins explicitly — the browser
+# preflight fails otherwise, which is invisible from the server's own
+# logs and only shows up as a network error in the console's devtools.
+# FRONTEND_ORIGIN is additive to localhost, never a replacement for it,
+# so local dev against a deployed API keeps working.
+_origins = ["http://localhost:3000"]
+_frontend = os.getenv("FRONTEND_ORIGIN")
+if _frontend:
+    _origins.append(_frontend.rstrip("/"))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+logging.getLogger("main").info("CORS allow_origins resolved to: %s", _origins)
 
 app.include_router(qna_router)
 app.include_router(console_router)
