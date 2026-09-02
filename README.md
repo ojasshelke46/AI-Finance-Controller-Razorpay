@@ -9,6 +9,25 @@ queue in the console and accepts, writes off, or reopens each row; every
 decision writes an `audit_log` entry recording what the row looked like
 beforehand.
 
+## Running now
+
+| | |
+|---|---|
+| Console | https://ai-finance-controller-razorpay.vercel.app |
+| API | https://ai-finance-controller-razorpay-production.up.railway.app |
+| Health | [`/health`](https://ai-finance-controller-razorpay-production.up.railway.app/health) — checks Supabase, the LLM chain and Razorpay, and reports which are down rather than a single green tick |
+
+The scheduler runs on the deployed API, so the system keeps working with nobody
+watching: it polls Razorpay every 15 minutes, resumes any batch left
+non-terminal for 30 minutes, retries still-unexplained variances every 6 hours,
+and writes a daily rollup. The status page shows the next run time for each of
+those jobs and the events they have written, which is the honest way to show
+autonomy — the schedule is a claim, the audit trail is the evidence.
+
+`/health` calls the LLM chain for real, so it takes a few seconds and is
+occasionally the slowest thing on the page. That is the check doing its job
+rather than reporting a cached opinion.
+
 ## Where the numbers come from
 
 Batch `ca2dafbe-995d-4e64-a76e-0da4263d075b`, scored `2026-09-01T21:26:28Z`.
@@ -207,6 +226,13 @@ reach a scored run without them.
    be left blank for steps 2–6; without them `/health` will report Razorpay
    down, which is accurate rather than broken.
 
+   `FRONTEND_ORIGIN` is only needed when the API and the console are deployed to
+   different origins. It is appended to the CORS allow-list alongside
+   `http://localhost:3000` rather than replacing it, so local development keeps
+   working either way; leave it blank when running both locally. The resolved
+   list is logged once at startup, so which origins are actually active can be
+   read off the deploy log instead of guessed at.
+
 2. **Apply the migrations, in order.** There is no migration runner; paste each
    file into the Supabase SQL editor and run it:
    ```
@@ -216,10 +242,22 @@ reach a scored run without them.
    api/migrations/0004_drop_txns_external_ref_unique.sql
    api/migrations/0005_match_groups_variance_components.sql
    api/migrations/0006_run_scores_explanation_grounding.sql
+   api/migrations/0007_run_scores_records_per_second.sql
+   api/migrations/0008_enable_rls.sql
    ```
    0003 and 0004 must both be applied and in that order — 0004 drops an index
    0003 creates, and the pair is kept rather than collapsed so the schema history
    stays honest.
+
+   0008 turns row level security on for every table and creates **no policies**,
+   which is the intended end state rather than an unfinished one. RLS with no
+   policies denies the `anon` and `authenticated` roles everything, and nothing
+   here needs those roles: the API connects as `service_role`, which bypasses
+   RLS, and the console reads through the API rather than querying Supabase from
+   the browser. Skip it and the Supabase anon key — which is public by
+   construction, since `NEXT_PUBLIC_` variables are compiled into the browser
+   bundle — grants anyone who loads the deployed page full read and write on the
+   database. See [Known limitations](#known-limitations).
 
 3. **Install the Python dependencies.**
    ```bash
@@ -307,6 +345,20 @@ because nothing in the pipeline path uses it.
 - **The batch lock is advisory,** a compare-and-set on a timestamp in
   `run_state`, sufficient for the single scheduler process this runs as. It is
   not a distributed lock.
+- **There is no authentication.** The console and the API are both open: anyone
+  with the URL can read every batch and act on a variance. That is a deliberate
+  scope choice for a single-operator demo, not an oversight, but it is the first
+  thing that would have to change before this saw a real merchant's data. RLS
+  (migration 0008) closes direct database access, so the API is the only way in
+  — it does not put a door on the API itself.
+- **The database had RLS disabled until late in the build.** Every table was
+  readable and writable with the public anon key, which is compiled into the
+  browser bundle by design — verified at the time: `select` on `txns` returned
+  live records, `insert` succeeded, `delete` returned 204. Fixed in 0008 and
+  re-verified (anon `select` returns `[]`, `insert` is 401, a `delete` aimed at
+  a row that exists leaves it there). Recorded here rather than quietly
+  corrected, because "it is secure now" and "it was never exposed" are different
+  claims and only the first one is true.
 - **Q&A refuses rather than answers when it cannot trace a figure.** Every
   number in a generated answer is checked against the numbers in the supplied
   context; one regeneration is attempted, then the answer is withheld. That is
