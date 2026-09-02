@@ -535,7 +535,19 @@ function VarianceRow({
               )}
             >
               <div className="overflow-hidden">
-                <div className="px-4 py-4">
+                {/* This cell sits in a table whose width is set by its own
+                 *  columns (~1360px), not by the viewport, and the
+                 *  overflow-hidden above is what makes the expanded panel
+                 *  animate. Together those silently cropped the right-hand
+                 *  Assessment panel — confidence and suggested action —
+                 *  off screen on any viewport narrower than the table,
+                 *  with no scrollbar to say content was missing.
+                 *
+                 *  sticky left-0 anchors the detail to the visible edge
+                 *  instead of the table's scrolled width, and the max-width
+                 *  caps it to what is actually on screen, so the grid below
+                 *  reflows into one column instead of being cropped. */}
+                <div className="sticky left-0 max-w-[calc(100vw-4rem)] px-4 py-4">
                   <VarianceDetail variance={variance} />
                 </div>
               </div>
