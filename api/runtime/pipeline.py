@@ -203,10 +203,24 @@ def get_batch(batch_id: str) -> dict | None:
 
 
 def set_status(batch_id: str, status: str, *, error_text: str | None = None,
-               completed: bool = False) -> None:
+               completed: bool = False, clear_error: bool = False) -> None:
+    """Writes the batch's current state.
+
+    clear_error exists because error_text describes the batch NOW, not
+    every bad thing that ever happened to it. A batch that failed at a
+    stage, got resumed, and then ran all nine stages to completion is
+    complete — but it used to keep the old error_text forever, so the
+    console showed a green COMPLETE badge and a red "this run failed"
+    banner on the same screen, which is worse than either alone. The
+    failure is not being erased: stage_failed and batch_failed rows,
+    with the full traceback, stay in audit_log where the history
+    belongs.
+    """
     patch: dict = {"status": status}
     if error_text is not None:
         patch["error_text"] = error_text[:4000]
+    elif clear_error:
+        patch["error_text"] = None
     if completed:
         patch["completed_at"] = datetime.now(timezone.utc).isoformat()
     db.run_with_retry(
@@ -409,7 +423,7 @@ def run_batch(batch_id: str, *, force: bool = False) -> dict:
                 "stage": name, "elapsed_seconds": elapsed, "summary": _summarise(result),
             })
 
-        set_status(batch_id, STATUS_COMPLETE, completed=True)
+        set_status(batch_id, STATUS_COMPLETE, completed=True, clear_error=True)
         total = round(time.monotonic() - started, 2)
         write_audit(batch_id, "batch_complete", {
             "stages_run": ran, "stages_skipped": skipped, "elapsed_seconds": total,

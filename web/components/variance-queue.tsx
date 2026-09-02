@@ -50,12 +50,20 @@ export function VarianceQueue({
   batchId,
   activeCategory,
   activeStatus,
+  batchStatus,
+  failedStage,
+  totalTxns,
 }: {
   variances: Variance[];
   categories: string[];
   batchId: string;
   activeCategory?: string;
   activeStatus?: string;
+  /** Needed so an empty queue can tell "nothing to decide" apart from
+   *  "this run never got far enough to produce anything". */
+  batchStatus?: string;
+  failedStage?: string | null;
+  totalTxns?: number;
 }) {
   // 200ms, matching --duration-expand in globals.css.
   const { mountedId, openId, toggle } = useDisclosure(200);
@@ -86,6 +94,35 @@ export function VarianceQueue({
 
   const undecided = optimistic.filter((v) => urgency(v.status) < 2);
   const openCount = optimistic.filter((v) => v.status === "open").length;
+
+  /** An empty queue means two completely different things, and saying the
+   *  reassuring one in the wrong case is the failure that costs the most
+   *  trust: a run that died before ingesting anything reported "every
+   *  record reconciled cleanly", which reads as success to an operator
+   *  who has in fact lost the run. An empty queue is only good news when
+   *  the run finished AND there were records to reconcile. */
+  const emptyQueue = (() => {
+    if (batchStatus === "failed") {
+      return {
+        title: "No queue — this run failed",
+        description: failedStage
+          ? `The run stopped at the ${failedStage} stage and never produced a variance queue. Nothing here has been reconciled, and nothing has been checked. Re-run the batch; the pipeline resumes from the stage that failed.`
+          : "The run failed before producing a variance queue. Nothing here has been reconciled, and nothing has been checked. Re-run the batch; the pipeline resumes from the stage that failed.",
+      };
+    }
+    if (totalTxns === 0) {
+      return {
+        title: "No records were ingested",
+        description:
+          "This batch finished with nothing in it, so there was nothing to reconcile and nothing to decide. An empty queue here is not a clean result — check the ingest stage in the audit trail for what the source returned.",
+      };
+    }
+    return {
+      title: "Nothing in the queue",
+      description:
+        "Every record in this batch reconciled cleanly. There is nothing for an operator to decide.",
+    };
+  })();
   const undecidedValue = undecided.reduce((sum, v) => sum + Math.abs(v.variance_paise), 0);
   const largestUndecided = undecided.reduce(
     (max, v) => Math.max(max, Math.abs(v.variance_paise)),
@@ -143,12 +180,12 @@ export function VarianceQueue({
           title={
             activeCategory || activeStatus
               ? "Nothing matches these filters"
-              : "Nothing in the queue"
+              : emptyQueue.title
           }
           description={
             activeCategory || activeStatus
               ? "No variance in this batch has that combination of status and category. Clear the filters to see the whole queue."
-              : "Every record in this batch reconciled cleanly. There is nothing for an operator to decide."
+              : emptyQueue.description
           }
         />
       ) : (
