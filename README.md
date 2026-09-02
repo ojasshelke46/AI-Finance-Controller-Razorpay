@@ -11,9 +11,13 @@ beforehand.
 
 ## Where the numbers come from
 
-Batch `9adfb642-e4e3-4227-aff0-c035be3ecb08`, scored `2026-09-01T16:45:24Z`.
+Batch `ca2dafbe-995d-4e64-a76e-0da4263d075b`, scored `2026-09-01T21:26:28Z`.
 The figures below are the `run_scores` row for that batch and can be read back
-with `python -m scripts.run_pipeline 9adfb642-e4e3-4227-aff0-c035be3ecb08`.
+with `python -m scripts.run_pipeline ca2dafbe-995d-4e64-a76e-0da4263d075b`. This
+run was not triggered by hand: the corpus was generated and left alone, and the
+scheduler's `resume_stuck_batches` job picked it up autonomously
+(`audit_log`: `resuming_stuck_batch`, 96 minutes after generation, actor
+`scheduler`) and ran ingest through score in one uninterrupted pass.
 
 This batch is a **generated corpus**, not live merchant data. Precision and
 recall only exist because the generator recorded which rows belong to the same
@@ -31,8 +35,12 @@ because it is the only source that has an answer key to score against.
 | F1 | 0.999429 |
 | True / false positives | 1,749 / 0 |
 | False negatives | 2 |
-| Explanation grounding rate | 93.33% |
-| Unexplained value left open | ₹2,580.43 (258,043 paise) |
+| Explanation grounding rate | 96.67% |
+| Unexplained value left open | ₹494.88 (49,488 paise) |
+| Wall clock | 6,612.33s |
+| Throughput | 0.1812 records/sec |
+| LLM calls served | 23 |
+| LLM cost estimate | $0.011450 |
 
 The match rate has a ceiling below 100% by construction. 162 of the 1,198 rows
 are noise the corpus injects deliberately — rows belonging to no economic event,
@@ -43,10 +51,22 @@ that had a counterpart. Precision is pair-level, not group-level (see
 and zero false positives across 1,749 predicted pairs means no two rows from
 different economic events were merged.
 
-The run produced 311 match groups and 169 variances, of which 135 were explained
-and 34 remain open for a person. `wall_clock_seconds` on this row reads ~20
-hours and is not a performance figure: it measures first to last `audit_log`
-timestamp, and this batch was interrupted overnight and resumed the next day.
+Wall clock and throughput are `run_scores.wall_clock_seconds` /
+`records_per_second`, computed as documented in `eval/scorer.py`: earliest to
+latest `audit_log` timestamp for the batch, divided into `total_txns`. Read
+literally that is 0.18 records/sec, and read literally is misleading here for a
+specific, checkable reason: that span includes the 96 minutes the batch sat
+`pending` before the scheduler's own idle threshold
+(`STUCK_AFTER_MINUTES = 30` in `runtime/scheduler.py`) made it eligible to
+resume, which is autonomy working as designed, not the pipeline being slow.
+The pipeline's own internal timer for that run — `audit_log`'s
+`batch_complete` event, `elapsed_seconds`, a different field from a different
+table than the `run_scores` row above — recorded 695.62 seconds from
+`tier1` through `score`, 1,198 ÷ 695.62 ≈ 1.72 records/sec of actual
+processing. Both numbers are real; they answer different questions.
+
+The run produced 311 match groups and 169 variances, of which 161 were explained
+and 8 remain open for a person.
 
 ## Architecture
 
@@ -292,9 +312,14 @@ because nothing in the pipeline path uses it.
   context; one regeneration is attempted, then the answer is withheld. That is
   the intended behaviour, but it means some legitimate questions get a refusal.
 - **Older batches in the database are in mixed states.** Some early ones predate
-  `run_scores` and carry no score; several are chaos-test artifacts left
-  deliberately in `pending` or carrying an `error_text` from an injected fault.
-  Only the batch named above should be read as a result.
+  `run_scores` and carry no score. Several are `chaos_test.py` artifacts — real
+  batches the scenarios create to inject a fault into, e.g. a corrupt CSV row or
+  a duplicate ingest — and once the scheduler is running (the default; see
+  Setup step 7) it eventually resumes and scores those too, same as it would
+  any other non-terminal batch, so their state keeps changing rather than
+  sitting fixed. `error_text` on one of them means a scenario's injected
+  failure actually happened, not that something broke. Only the batch named
+  above should be read as a result.
 
 ## Resilience
 
