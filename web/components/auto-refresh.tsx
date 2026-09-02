@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { formatTime } from "@/lib/format";
+import { useMounted } from "@/lib/use-mounted";
 
 /**
  * Re-fetches the server component on an interval so the status page is
@@ -37,6 +38,7 @@ export function AutoRefresh({
   asOf?: string | null;
 }) {
   const router = useRouter();
+  const mounted = useMounted();
   const [remaining, setRemaining] = useState(seconds);
   const [paused, setPaused] = useState(false);
   const deadlineRef = useRef<number>(Date.now() + seconds * 1000);
@@ -77,7 +79,12 @@ export function AutoRefresh({
     <div className="flex shrink-0 items-baseline gap-3 text-[11px] text-muted-foreground">
       {asOf ? (
         <span>
-          Read at <time dateTime={asOf} className="num">{formatTime(asOf)}</time>
+          Read at{" "}
+          <time dateTime={asOf} className="num">
+            {/* Formatted in the viewer's timezone, so it cannot be
+             *  rendered until only the viewer is rendering. */}
+            {mounted ? formatTime(asOf) : "—"}
+          </time>
         </span>
       ) : null}
       <span aria-live="off">

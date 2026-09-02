@@ -5,6 +5,7 @@ import { useState } from "react";
 import { EmptyState, Panel, PanelHeader } from "@/components/primitives";
 import type { AuditEvent } from "@/lib/api";
 import { formatDate, formatTime, humanise } from "@/lib/format";
+import { useMounted } from "@/lib/use-mounted";
 import { actorLabel, eventLabel, eventTone, stepLabel } from "@/lib/gloss";
 import { formatCount } from "@/lib/money";
 import { cn } from "@/lib/utils";
@@ -33,6 +34,7 @@ export function AuditTrail({
   activeStep?: string;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
+  const mounted = useMounted();
 
   const base = `/batches/${batchId}/audit`;
   const link = (params: { actor?: string; step?: string }) => {
@@ -117,9 +119,15 @@ export function AuditTrail({
             const open = openId === id;
             const hasDetail = event.detail && Object.keys(event.detail).length > 0;
             const previous = events[index - 1];
+            // Gated on mount with everything else derived from a clock:
+            // whether two events fall on the same day depends on the
+            // viewer's timezone, so this decides DOM STRUCTURE, not just
+            // text. Rendering it on the server would make the client's
+            // first render disagree about whether a separator exists.
             const newDay =
-              index === 0 ||
-              formatDate(previous?.created_at) !== formatDate(event.created_at);
+              mounted &&
+              (index === 0 ||
+                formatDate(previous?.created_at) !== formatDate(event.created_at));
             const byOperator = event.actor === "human";
             const tone = eventTone(event.action);
 
@@ -127,7 +135,7 @@ export function AuditTrail({
               <li key={id}>
                 {newDay ? (
                   <p className="num border-y border-border bg-surface-raised px-4 py-1 text-[11px] text-muted-foreground first:border-t-0">
-                    {formatDate(event.created_at)}
+                    {mounted ? formatDate(event.created_at) : "—"}
                   </p>
                 ) : null}
 
@@ -160,7 +168,7 @@ export function AuditTrail({
                     dateTime={event.created_at}
                     className="num text-[11.5px] text-muted-foreground"
                   >
-                    {formatTime(event.created_at)}
+                    {mounted ? formatTime(event.created_at) : "—"}
                   </time>
 
                   <span

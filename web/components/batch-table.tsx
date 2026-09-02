@@ -6,6 +6,7 @@ import { useMemo, useState } from "react";
 import { DataTable, Pill, Td, Th, batchSeverity } from "@/components/primitives";
 import type { BatchSummary } from "@/lib/api";
 import { formatDateTime, relativeTime } from "@/lib/format";
+import { useMounted } from "@/lib/use-mounted";
 import { batchStatusLabel } from "@/lib/gloss";
 import { formatCount, formatPaise, formatRatio } from "@/lib/money";
 import { cn } from "@/lib/utils";
@@ -30,6 +31,10 @@ export function BatchTable({ batches }: { batches: BatchSummary[] }) {
   const [ascending, setAscending] = useState(false);
 
   // Fixed at render so every row is judged against the same instant.
+  const mounted = useMounted();
+  // Date.now() differs between the server render and hydration a moment
+  // later, and relativeTime's sub-45s bucket changes every second, so
+  // nothing derived from it may be rendered before mount.
   const now = useMemo(() => Date.now(), []);
 
   const failed = batches.filter((b) => b.status === "failed");
@@ -181,7 +186,8 @@ export function BatchTable({ batches }: { batches: BatchSummary[] }) {
                   ) : null}
                   {stalledRow ? (
                     <span className="block text-[11px] text-warn">
-                      no finish after {relativeTime(batch.created_at, now).replace(" ago", "")}
+                      no finish after{" "}
+                      {mounted ? relativeTime(batch.created_at, now).replace(" ago", "") : "—"}
                     </span>
                   ) : null}
                 </div>
@@ -222,9 +228,9 @@ export function BatchTable({ batches }: { batches: BatchSummary[] }) {
               <Td
                 align="right"
                 className="num text-[11.5px] whitespace-nowrap text-muted-foreground"
-                title={formatDateTime(batch.created_at)}
+                title={mounted ? formatDateTime(batch.created_at) : undefined}
               >
-                {relativeTime(batch.created_at, now)}
+                {mounted ? relativeTime(batch.created_at, now) : "—"}
               </Td>
             </tr>
           );
