@@ -79,17 +79,17 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
                   WebkitMaskPosition: "center",
                 }}
               />
-              <span className="flex items-baseline gap-2 text-[13px] font-semibold tracking-tight">
-                Reconciliation
-                <span className="text-[10.5px] font-medium tracking-[0.08em] text-muted-foreground uppercase">
-                  Console
-                </span>
-              </span>
             </span>
             <nav aria-label="Primary" className="flex items-center gap-1">
               <NavLink href="/">Status</NavLink>
               <NavLink href="/batches">Batches</NavLink>
             </nav>
+            <span className="ml-auto flex items-baseline gap-2 text-[13px] font-semibold tracking-tight">
+              Reconciliation
+              <span className="text-[10.5px] font-medium tracking-[0.08em] text-muted-foreground uppercase">
+                Console
+              </span>
+            </span>
           </div>
         </header>
 
