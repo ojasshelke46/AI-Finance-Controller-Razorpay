@@ -37,10 +37,45 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
              *  the current section, so every one of them looked like it
              *  did nothing. Navigation lives in the nav; Status is the
              *  home route and says so by being marked current. */}
-            <span className="flex items-baseline gap-2 text-[13px] font-semibold tracking-tight">
-              Reconciliation
-              <span className="text-[10.5px] font-medium tracking-[0.08em] text-muted-foreground uppercase">
-                Console
+            <span className="flex items-center gap-2">
+              {/* The Razorpay mark, as a credit for the integration this
+               *  console reconciles against — one instance, nav only.
+               *
+               *  Rendered through a CSS mask filled with currentColor
+               *  rather than as a plain <img>, so it takes
+               *  muted-foreground like every other non-severity element
+               *  in this header. brand.md principle 2 reserves all
+               *  chromatic colour for severity; dropping a brand-blue
+               *  logo into the nav would put a saturated blue on the
+               *  same screen as the critical and warn tokens and give
+               *  the eye something to read as a status that is not one.
+               *  The mark is a single flat shape, so it survives losing
+               *  its colour — no background, border or badge around it.
+               *
+               *  role="img" + aria-label because this is meaningful
+               *  content, not decoration; 176x292 source at 18px tall
+               *  is a ~16x downscale, so it stays crisp on retina. */}
+              <span
+                role="img"
+                aria-label="Razorpay"
+                className="h-[18px] w-[11px] shrink-0 text-muted-foreground"
+                style={{
+                  backgroundColor: "currentColor",
+                  maskImage: "url(/razorpay-mark.png)",
+                  WebkitMaskImage: "url(/razorpay-mark.png)",
+                  maskSize: "contain",
+                  WebkitMaskSize: "contain",
+                  maskRepeat: "no-repeat",
+                  WebkitMaskRepeat: "no-repeat",
+                  maskPosition: "center",
+                  WebkitMaskPosition: "center",
+                }}
+              />
+              <span className="flex items-baseline gap-2 text-[13px] font-semibold tracking-tight">
+                Reconciliation
+                <span className="text-[10.5px] font-medium tracking-[0.08em] text-muted-foreground uppercase">
+                  Console
+                </span>
               </span>
             </span>
             <nav aria-label="Primary" className="flex items-center gap-1">
