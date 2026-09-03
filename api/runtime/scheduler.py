@@ -1,6 +1,6 @@
 """The part that runs without anybody asking it to.
 
-Four jobs, started from the FastAPI lifespan handler:
+Five jobs, started from the FastAPI lifespan handler:
 
   every 15 min   poll Razorpay for activity newer than the cursor in
                  run_state; if there is any, open a batch and run the
@@ -13,6 +13,9 @@ Four jobs, started from the FastAPI lifespan handler:
                  as 'unexplained' — the counterpart record may have
                  arrived since
   daily 02:00    write a rollup of the previous day into audit_log
+  irregularly    seed a little synthetic Razorpay test activity, so the
+                 poll job has something organic to discover. OFF unless
+                 AUTO_SEED_ENABLED says otherwise — see auto_seed_enabled()
 
 APScheduler's BackgroundScheduler is used deliberately over the async
 variant: every stage in this system is blocking (HTTP to Razorpay,
@@ -31,6 +34,7 @@ process.
 
 import logging
 import os
+import random
 import traceback
 from datetime import date, datetime, timedelta, timezone
 
@@ -41,7 +45,12 @@ from apscheduler.triggers.interval import IntervalTrigger
 from eval.explanation_audit import run_explanation_audit
 from explain.variance_explainer import run_variance_explainer
 from lib import db
-from lib.razorpay_client import RazorpayError, fetch_payments, fetch_settlements
+from lib.razorpay_client import (
+    RazorpayError,
+    fetch_payments,
+    fetch_settlements,
+    refund_payment,
+)
 from runtime.pipeline import (
     AUDIT_SAMPLE_SIZE,
     TERMINAL_STATUSES,
@@ -68,6 +77,25 @@ STUCK_AFTER_MINUTES = 30
 POLL_LOOKBACK_DAYS = 30
 CURSOR_KEY = "razorpay_cursor"
 MAX_BATCHES_PER_RETRY_TICK = 3
+
+# Auto-seed (job 5). The gap between runs is a floor plus a fresh random
+# offset, not a period. APScheduler's jitter is ONE-sided — it adds
+# random.uniform(0, jitter) to every next_run_time it computes — so a
+# 20-minute interval with 70 minutes of jitter puts consecutive gaps
+# uniformly across 20..90 minutes, redrawn each time. That is the whole
+# point: a fixed tick reads as a cron job on any graph of it, and this is
+# meant to read as a merchant taking payments.
+AUTO_SEED_BASE_MINUTES = 20
+AUTO_SEED_JITTER_MINUTES = 70
+# Must stay under the 20-minute floor above, so a lock orphaned by a
+# killed process cannot still be blocking the next run.
+AUTO_SEED_LOCK_MINUTES = 15
+AUTO_SEED_QUIET_CHANCE = 0.35
+AUTO_SEED_MIN_PAYMENTS = 1
+AUTO_SEED_MAX_PAYMENTS = 4
+AUTO_SEED_MIN_PAISE = 30_000    # Rs 300
+AUTO_SEED_MAX_PAISE = 500_000   # Rs 5,000
+AUTO_SEED_REFUND_CHANCE = 0.2   # roughly one run in five
 
 _scheduler: BackgroundScheduler | None = None
 
@@ -389,6 +417,113 @@ def daily_rollup(day: date | None = None) -> dict:
 
 
 # ---------------------------------------------------------------------
+# job 5 — seed synthetic activity (opt in)
+# ---------------------------------------------------------------------
+
+def auto_seed_enabled() -> bool:
+    """Opt in, and deliberately the inverse of scheduler_enabled(): off
+    unless someone explicitly turns it on. Every payment this creates is
+    found by the poll job on its next tick and flows through the entire
+    pipeline, which spends real LLM budget on whichever provider is
+    primary at the time — so an accidental 'on' is not free."""
+    return os.getenv("AUTO_SEED_ENABLED", "0").lower() in ("1", "true", "yes")
+
+
+def auto_seed_activity() -> dict:
+    """Drip a small amount of synthetic merchant activity into the
+    connected Razorpay TEST account, so the poll job has something
+    organic to discover instead of somebody running scripts.seed_razorpay
+    by hand before every demo.
+
+    Nothing here is special-cased downstream: the payments it creates are
+    ordinary Razorpay test records, indistinguishable from manually
+    seeded ones once ingested. The audit_log entry this job writes is the
+    only thing that tells the two apart later, which is why it is written
+    on every run — including the runs that deliberately do nothing.
+
+    seed_card_payment is imported inside the function rather than at
+    module scope, unlike the other four jobs' shared logic: it pulls in
+    playwright, which is a local-only dependency and is not in
+    requirements.txt, so a top-level import would break the deployed API
+    for the sake of a job that is off by default there anyway.
+    """
+    from scripts.seed_razorpay import seed_card_payment
+
+    lock = "job_lock:auto_seed"
+    if not acquire_named_lock(lock, ttl_minutes=AUTO_SEED_LOCK_MINUTES):
+        logger.info("auto-seed tick skipped — another worker holds the seed lock")
+        return {"outcome": "locked"}
+
+    try:
+        # Real merchant activity has gaps in it. A tick that fires is not
+        # a tick that has to produce something, or the "organic" activity
+        # is just a slower, wobblier drip.
+        if random.random() < AUTO_SEED_QUIET_CHANCE:
+            _audit("auto_seeded_activity", {
+                "payments_seeded": 0, "total_paise": 0, "refunds_issued": 0,
+                "outcome": "quiet_tick",
+            })
+            logger.info("auto-seed tick was a deliberate no-op")
+            return {"outcome": "quiet", "payments_seeded": 0}
+
+        wanted = random.randint(AUTO_SEED_MIN_PAYMENTS, AUTO_SEED_MAX_PAYMENTS)
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+        seeded: list[dict] = []
+        failures: list[str] = []
+
+        for i in range(wanted):
+            # Whole rupees, in the range the rest of this corpus lives in.
+            amount = random.randrange(AUTO_SEED_MIN_PAISE, AUTO_SEED_MAX_PAISE + 1, 100)
+            try:
+                payment_id = seed_card_payment(amount, f"auto seed {stamp} #{i + 1}")
+            except Exception as exc:  # noqa: BLE001 — one flaky checkout must not lose the rest
+                logger.warning("auto-seed could not create a payment: %s", exc)
+                failures.append(str(exc)[:300])
+                continue
+            seeded.append({"payment_id": payment_id, "amount_paise": amount})
+
+        refunds: list[dict] = []
+        if seeded and random.random() < AUTO_SEED_REFUND_CHANCE:
+            target = random.choice(seeded)
+            partial = target["amount_paise"] // 3 if random.random() < 0.5 else None
+            try:
+                refund_payment(target["payment_id"], amount_paise=partial)
+                refunds.append({
+                    "payment_id": target["payment_id"],
+                    "amount_paise": partial if partial is not None else target["amount_paise"],
+                    "kind": "partial" if partial is not None else "full",
+                })
+            except RazorpayError as exc:
+                logger.warning("auto-seed refund failed: %s", exc)
+                failures.append(str(exc)[:300])
+
+        detail = {
+            "payments_seeded": len(seeded),
+            "total_paise": sum(s["amount_paise"] for s in seeded),
+            "refunds_issued": len(refunds),
+            "refunded_paise": sum(r["amount_paise"] for r in refunds),
+            "payment_ids": [s["payment_id"] for s in seeded],
+            "refunds": refunds,
+            "attempted": wanted,
+            "failures": failures,
+            "outcome": "seeded",
+        }
+        _audit("auto_seeded_activity", detail)
+        logger.info("auto-seeded %s payment(s) worth %s paise", len(seeded), detail["total_paise"])
+        return {"outcome": "seeded", **detail}
+    except Exception as exc:  # noqa: BLE001 — a scheduler job must never die silently
+        logger.exception("auto-seed job crashed")
+        _audit("job_crashed", {
+            "job": "auto_seed_activity",
+            "error": str(exc)[:1000],
+            "traceback": traceback.format_exc()[:8000],
+        })
+        return {"outcome": "crashed", "error": str(exc)}
+    finally:
+        release_named_lock(lock)
+
+
+# ---------------------------------------------------------------------
 # wiring
 # ---------------------------------------------------------------------
 
@@ -419,6 +554,22 @@ def build_scheduler(*, run_poll_at_startup: bool = True) -> BackgroundScheduler:
                       name="retry unexplained variances", **common)
     scheduler.add_job(daily_rollup, CronTrigger(hour=ROLLUP_HOUR, minute=0),
                       id="daily_rollup", name="daily rollup", **common)
+
+    if auto_seed_enabled():
+        logger.warning(
+            "AUTO_SEED_ENABLED is on: this process will CREATE synthetic Razorpay "
+            "test payments and refunds on its own, at irregular %s-%s minute "
+            "intervals. Every one of them is picked up by the poll job and run "
+            "through the full pipeline, spending real LLM budget. Turn this off "
+            "outside of an active demo or recording session.",
+            AUTO_SEED_BASE_MINUTES,
+            AUTO_SEED_BASE_MINUTES + AUTO_SEED_JITTER_MINUTES,
+        )
+        scheduler.add_job(
+            auto_seed_activity,
+            IntervalTrigger(minutes=AUTO_SEED_BASE_MINUTES,
+                            jitter=AUTO_SEED_JITTER_MINUTES * 60),
+            id="auto_seed_activity", name="auto-seed synthetic activity", **common)
     return scheduler
 
 
