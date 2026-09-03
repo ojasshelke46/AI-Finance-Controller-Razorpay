@@ -30,16 +30,24 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         </a>
 
         <header className="sticky top-0 z-30 border-b border-border bg-surface/95 backdrop-blur">
-          <div className="mx-auto flex h-11 max-w-[1400px] items-center gap-5 px-4 md:px-6">
+          <div className="mx-auto flex h-12 max-w-[1400px] items-center gap-5 px-4 md:px-6">
             {/* The wordmark is identity, not navigation. It used to link
              *  to "/", which is also where "Status" goes — three
              *  clickable things, two destinations, and no indication of
              *  the current section, so every one of them looked like it
              *  did nothing. Navigation lives in the nav; Status is the
              *  home route and says so by being marked current. */}
-            <span className="flex items-center gap-2">
-              {/* The Razorpay mark, as a credit for the integration this
+            <span className="flex items-center gap-2.5">
+              {/* The Razorpay logo, as a credit for the integration this
                *  console reconciles against — one instance, nav only.
+               *
+               *  The full lockup rather than the mark alone. In this
+               *  asset the mark is a blue arrow PLUS a white
+               *  parallelogram, and a previous crop of "just the mark"
+               *  silently lost the white half, because compositing the
+               *  source on white made it invisible to look at. Using the
+               *  lockup whole avoids re-deriving a mark from an asset
+               *  whose shape is not visible against every background.
                *
                *  Rendered through a CSS mask filled with currentColor
                *  rather than as a plain <img>, so it takes
@@ -49,20 +57,20 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
                *  logo into the nav would put a saturated blue on the
                *  same screen as the critical and warn tokens and give
                *  the eye something to read as a status that is not one.
-               *  The mark is a single flat shape, so it survives losing
-               *  its colour — no background, border or badge around it.
+               *  The mask also solves this asset's white wordmark, which
+               *  would otherwise be invisible in light mode.
                *
                *  role="img" + aria-label because this is meaningful
-               *  content, not decoration; 176x292 source at 18px tall
+               *  content, not decoration; 1693x360 source at 22px tall
                *  is a ~16x downscale, so it stays crisp on retina. */}
               <span
                 role="img"
                 aria-label="Razorpay"
-                className="h-[18px] w-[11px] shrink-0 text-muted-foreground"
+                className="h-[22px] w-[104px] shrink-0 text-muted-foreground"
                 style={{
                   backgroundColor: "currentColor",
-                  maskImage: "url(/razorpay-mark.png)",
-                  WebkitMaskImage: "url(/razorpay-mark.png)",
+                  maskImage: "url(/razorpay-logo.png)",
+                  WebkitMaskImage: "url(/razorpay-logo.png)",
                   maskSize: "contain",
                   WebkitMaskSize: "contain",
                   maskRepeat: "no-repeat",
