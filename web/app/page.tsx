@@ -260,8 +260,9 @@ export default async function StatusPage() {
             </>
           ) : (
             <p className="text-[12px] text-muted-foreground">
-              No run has been scored yet. Scores appear once a batch finishes with ground
-              truth available.
+              No scored reconciliation run yet. Chaos tests and single-source auto-poll
+              batches are left out of this figure, so it appears once a batch finishes
+              with more than one source and ground truth available.
             </p>
           )}
         </section>

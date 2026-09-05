@@ -34,6 +34,9 @@ _PAGE = 1000
 # batch from a real run, so it is named here rather than being spelled
 # out inline at each use.
 CHAOS_LABEL_PREFIX = "chaos:"
+# poll_razorpay_activity labels every batch it opens
+# f"auto {period_start} to {period_end}" — see runtime/scheduler.py.
+AUTO_POLL_LABEL_PREFIX = "auto "
 MAX_BATCHES = 100
 
 
@@ -152,13 +155,25 @@ def status():
     # headlined the whole system at 3.66% match / 0.00% precision with
     # nothing on the card to say it was a fault injection.
     #
+    # Auto-poll batches are excluded for the same reason, from a
+    # different cause. These are real runs, not fault injections —
+    # nothing about them is broken. But poll_razorpay_activity only ever
+    # ingests from Razorpay's own API, so the batch it opens holds
+    # exactly one source and there is no counterparty side for a match
+    # to be found against. Match rate, precision and recall are all
+    # measures of cross-source matching, so on a single-source batch
+    # they read 0.00% by construction, not by failure. Quoting one as
+    # the headline score says the matcher found nothing when what
+    # actually happened is that it was never given two sides to match.
+    #
     # Filtered in the query via an inner join on batches rather than in
-    # Python, so "most recent non-chaos score" stays one round trip.
+    # Python, so "most recent scorable score" stays one round trip.
     latest_score = db.run_with_retry(
         lambda: db.get_client().table("run_scores")
         .select("batch_id,run_at,match_rate,precision,recall,f1,total_txns,"
                 "explanation_grounding_pct,batches!inner(label)")
         .not_.like("batches.label", f"{CHAOS_LABEL_PREFIX}%")
+        .not_.like("batches.label", f"{AUTO_POLL_LABEL_PREFIX}%")
         .order("run_at", desc=True).limit(1).execute()
     ).data
     score = latest_score[0] if latest_score else None
